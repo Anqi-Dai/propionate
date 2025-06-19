@@ -1,0 +1,926 @@
+---
+title: "Kate propionate paper mouse data picrust2"
+output: html_document
+date: "2025-06-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+- renv::init(): Start renv in your project to create a private package library.
+- install.packages("package_name"): Install packages as you normally would.
+- renv::snapshot(): Save the state of your project's packages to renv.lock.
+- renv::restore(): Re-create the project's environment from the renv.lock file on a new machine.
+
+
+# installing picrust2  on linux 
+
+finally worked with creating new conda env, and then "mamba install bioconda::picrust2" with the older version picrust2_pipeline.py 2.0.3-b
+
+
+```{r}
+library(tidyverse)
+library(Maaslin2)
+library(ggrepel)
+```
+
+# reformatting the asv results from zymo pipeline
+
+The OTU table should be having this format:
+#OTUID	SampleA	SampleB	SampleC
+ASV_1	150	    0	    210
+ASV_2	0	    55	    84
+ASV_3	78	    12	    0
+
+```{r}
+asv_cts <- list.files('../data/', pattern = 'ASV_Abundance_Table.csv', full.names = T) 
+
+# make them the requested format in tsv
+
+asv_cts %>% 
+  map(function(fn){
+    read_csv(fn) %>% 
+      gather('seq_id','count', names(.)[2]:names(.)[ncol(.)]) %>% 
+      spread('seqs','count', fill = 0) %>% 
+      janitor::clean_names() %>% 
+      rename(`#ASVID` = seq_id)  %>% 
+      write_tsv(file = str_replace(fn, 'csv','tsv'))
+  })
+```
+
+```{r}
+library(Biostrings)
+# double check if the asv seq id match between the two 
+test <- read_csv(asv_cts[1]) %>% 
+      gather('seq_id','count', names(.)[2]:names(.)[ncol(.)]) 
+
+fasta_file <- '../data/transplant_sv.seqs.fna'
+dna_sequences <- readDNAStringSet(fasta_file)
+names(dna_sequences) 
+
+cleaned_names <- sub(" size=.*", "", names(dna_sequences) )
+
+#length(intersect(cleaned_names, test$seq_id))
+
+names(dna_sequences)  <- cleaned_names
+
+
+writeXStringSet(dna_sequences, filepath = fasta_file, format = "fasta")
+```
+
+# pathway output 
+
+```{r}
+pw_fns <- c('../data/picrust2_out_steady/pathways_out/path_abun_unstrat.tsv.gz','../data/picrust2_out_transplant//pathways_out/path_abun_unstrat.tsv.gz')
+
+# take a look at the total 
+
+pw_dfs <- pw_fns %>% 
+  set_names(c('steady','transplant')) %>% 
+  map(function(fn){
+    df = read_tsv(fn)
+    return(df)
+  })
+```
+
+
+```{r}
+combined_pathway_data <- pw_dfs %>%
+  purrr::map_dfr(~ .x %>%
+                   pivot_longer(
+                     cols = -pathway,        # Gathers all columns except 'pathway'
+                     names_to = "sample_id", # New column for original column names (sample IDs)
+                     values_to = "abundance" # New column for the values (abundances)
+                   ),
+                 .id = "exp")
+ 
+# 2. Calculate the total abundance for each unique pathway across all samples
+total_pathway_abundance <- combined_pathway_data %>%
+  group_by(pathway) %>%
+  summarise(total_abundance = sum(abundance, na.rm = TRUE)) %>% # Sum abundances for each pathway
+  ungroup() # Ungroup for subsequent operations if any
+
+# 3. Visualize the distribution of total pathway abundances using a histogram
+
+ggplot(total_pathway_abundance, aes(x = total_abundance)) +
+  geom_histogram(binwidth = 100000, # Adjust binwidth based on the data's range
+                 fill = "#2196F3",   # A nice blue color
+                 color = "white",    # White border for bars
+                 alpha = 0.8,        # Slightly transparent
+                 boundary = 0) +     # Align bins to start at 0
+  labs(
+    title = "Distribution of Total Predicted Pathway Abundances",
+    x = "Total Abundance",
+    y = "Number of Pathways"
+  ) +
+  theme_minimal() + # Use a minimalist theme
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"), # Center and style title
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    panel.grid.minor = element_blank(), # Remove minor grid lines
+    panel.background = element_rect(fill = "white", colour = "white"), # White background
+    plot.background = element_rect(fill = "white", colour = "white") # White plot background
+  )
+```
+```{r}
+# to look at the total abundance of all pathways in each sample 
+total_sample_abundance <- combined_pathway_data %>%
+  group_by(sample_id, exp) %>% # Group by sample_id and source_df 
+  summarise(total_abundance = sum(abundance, na.rm = TRUE)) %>% # Sum abundances for each sample
+  ungroup() # Ungroup for subsequent operations if any
+
+# 3. Visualize the distribution of total sample abundances using a histogram
+
+ggplot(total_sample_abundance, aes(x = total_abundance)) +
+  geom_histogram(binwidth = 1000000, 
+                 fill = "#00B0FF",   # A brighter blue color
+                 color = "white",    # White border for bars
+                 alpha = 0.8,        # Slightly transparent
+                 boundary = 0) +     # Align bins to start at 0
+  labs(
+    title = "Distribution of Total Pathway Abundances per Sample",
+    x = "Total Abundance (Sum of all Pathways)",
+    y = "Number of Samples"
+  ) +
+  theme_minimal() + # Use a minimalist theme
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"), # Center and style title
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    panel.grid.minor = element_blank(), # Remove minor grid lines
+    panel.background = element_rect(fill = "white", colour = "white"), # White background
+    plot.background = element_rect(fill = "white", colour = "white") # White plot background
+  )
+
+
+```
+
+```{r}
+# 3. Visualize the total abundance of all pathways in each sample as bars,
+ggplot(total_sample_abundance, aes(x = forcats::fct_reorder(sample_id, sample_id, .fun = function(x) as.numeric(factor(x))), # Sorts alphabetically
+                                   y = total_abundance,
+                                   fill = exp)) +
+  geom_col(color = "white", alpha = 0.8) + # Use geom_col for bar plots, with white borders
+  labs(
+    title = "Total Pathway Abundance per Sample",
+    x = "Sample ID (Sorted Alphabetically)",
+    y = "Total Abundance (Sum of all Pathways)",
+    fill = "Exp" # Legend title for fill color
+  ) +
+  theme_minimal() + # Use a minimalist theme
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"), # Center and style title
+    axis.title = element_text(size = 12),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8), # Rotate x-axis labels for readability
+    axis.text.y = element_text(size = 10),
+    legend.position = "bottom", # Place legend at the bottom
+    panel.grid.minor = element_blank(), # Remove minor grid lines
+    panel.background = element_rect(fill = "white", colour = "white"), # White background
+    plot.background = element_rect(fill = "white", colour = "white") # White plot background
+  ) +
+  scale_fill_brewer(palette = "Set1") + # Use a colorblind-friendly palette # Use a colorblind-friendly palette
+  facet_wrap(~ exp, nrow = 1, scales = "free_x")
+
+
+```
+
+```{r}
+# look at the sampleids which is relavent to the study design
+samples <- total_sample_abundance %>% distinct(exp, sample_id)
+```
+
+## steady state experiment
+
+MaAsLin2 is built for this kind of analysis. It can use the full dataset (pre and post) and properly model the paired samples by treating mouse_id as a random effect, giving a more accurate and powerful results.
+
+```{r}
+sample_names <- samples %>% filter(exp == 'steady') %>% pull(sample_id)
+
+metadata <- tibble(SampleID = sample_names) %>%
+  # Separate the sample ID string into four parts based on the underscore
+  separate(
+    SampleID,
+    into = c("Treatment", "Timepoint", "MouseWord", "MouseNum"),
+    sep = "_",        # <-- The separator is now an underscore
+    remove = FALSE    # Keep the original SampleID column
+  ) %>%
+  # Combine 'MouseWord' and 'MouseNum' to create a unique ID for each mouse
+  mutate(MouseID = paste(MouseWord, MouseNum, sep = "_")) %>%
+  # Select the final, clean columns we need for the analysis
+  select(SampleID, Treatment, Timepoint, MouseID) %>% 
+  mutate(Treatment = factor(Treatment, levels = c('pbs','propionate')),
+         Timepoint = factor(Timepoint, levels = c('pre','post')) )
+
+#  Prepare Data for MaAsLin2 ---
+# MaAsLin2 needs samples in rows and features (pathways) in columns.
+
+input_data <- combined_pathway_data %>%
+  filter(exp == 'steady') %>% 
+  select(SampleID = sample_id, pathway, abundance) %>%
+  pivot_wider(names_from = "pathway", values_from = "abundance") %>%
+  column_to_rownames("SampleID")
+```
+
+
+```{r}
+# Set SampleID as row names for the metadata as well
+input_metadata <- metadata %>%
+  column_to_rownames("SampleID") %>% 
+  mutate(Treatment = factor(Treatment, levels = c('pbs','propionate')),
+         Timepoint = factor(Timepoint, levels = c('pre','post')) )
+
+# Sanity check: Ensure sample names match perfectly between data and metadata
+stopifnot(all(rownames(input_data) == rownames(input_metadata)))
+
+
+# --- 5. Run MaAsLin2 Analysis ---
+fit_data <- Maaslin2(
+    input_data = input_data,
+    input_metadata = input_metadata,
+    output = "../results/01_maaslin2_propionate_results",
+    fixed_effects = c("Treatment", "Timepoint"),
+    random_effects = c("MouseID"), # Controls for repeated measures from the same mouse
+    normalization = "TSS",
+    transform = "LOG",
+    min_prevalence = 0.1,
+    max_significance = 0.05,
+    cores = 10
+)
+#The MaAsLin 2 plots show the normalized abundances (e.g., relative abundance) that were fed into the model, not raw counts.
+```
+
+### FDR < 0.05        
+
+```{r}
+sig_res <- read_tsv('../results/01_maaslin2_propionate_results/significant_results.tsv')
+
+propionate_effects <- sig_res %>%
+  filter(metadata == "Treatment" & value == "propionate") %>%
+  arrange(coef)
+
+ggplot(propionate_effects, aes(x = coef, y = reorder(feature, coef))) +
+  geom_col(aes(fill = coef > 0), show.legend = FALSE) + # Color bars by positive/negative
+  geom_vline(xintercept = 0, linetype = "dashed") + # Add a line at zero
+  labs(
+    title = "Pathways Affected by Propionate Treatment",
+    subtitle = "Compared to PBS Control",
+    x = "Coefficient (Effect Size)",
+    y = "Metabolic Pathway"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 8) # Adjust text size if names are long
+  )+
+  scale_fill_manual(values = c("FALSE" = "blue", "TRUE" = "red"))
+```
+
+```{r}
+# visualize the normalized data in those pathways
+df_norm <- read_tsv('../results/01_maaslin2_propionate_results/features/filtered_data_norm.tsv') %>% 
+   pivot_longer(
+    cols = -feature,               # Select all columns except the 'feature' (sample name) column
+    names_to = "Pathway",          # Name of the new column for the pathway IDs
+    values_to = "norm_Abundance"        # Name of the new column for the abundance values
+  ) %>%
+  # Separate the 'feature' column into three new metadata columns
+  separate(
+    feature,
+    into = c("Treatment", "Timepoint", "MouseWord", "MouseNum"),
+    sep = "_",        # <-- The separator is now an underscore
+    remove = FALSE    # Keep the original SampleID column
+  ) %>%
+  # Combine 'MouseWord' and 'MouseNum' to create a unique ID for each mouse
+  mutate(MouseID = paste(MouseWord, MouseNum, sep = "_")) %>%
+  # Select the final, clean columns we need for the analysis
+  select(SampleID = feature, Treatment, Timepoint, MouseID,Pathway,  norm_Abundance) %>% 
+  mutate(
+    Treatment = factor(Treatment, levels = c("pbs", "propionate")),
+    Timepoint = factor(Timepoint, levels = c("pre", "post"))
+    ) %>% 
+  mutate(cpm = norm_Abundance * 1e6)
+  
+```
+
+
+```{r}
+ggplot(
+    # Filter the data to only include the pathway we want to plot
+    data = df_norm %>% filter(Pathway == 'PWY.7374'),
+
+    # Define the aesthetics: what data maps to what visual property
+    aes(x = Treatment, y = cpm, fill = Treatment)
+  ) +
+  geom_boxplot(alpha = 0.7, width = 0.6, outlier.shape = NA) + # Draw the boxes
+  geom_jitter(width = 0.15, height = 0, size = 2) +           # Overlay the individual data points
+  facet_wrap(~ Timepoint) +                                   # Create separate plots for 'pre' and 'post'
+  labs(
+    title = paste("Abundance of", 'PWY.7374'),
+    subtitle = "Comparison before and after treatment",
+    x = "Treatment Group",
+    y = "Normalized Abundance"
+  ) +
+  theme_bw() + # Use a clean black-and-white theme
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 12), # Style the 'pre'/'post' facet labels
+    legend.position = "none" # The fill color is redundant with the x-axis
+    )
+```
+    
+### the LME looking at the unstratified data
+
+- Why the Mixed-Effects Model is Still the Best Choice
+
+- Fixed Effects: These are the variables you want to test: time (pre vs. post) and treatment_group (PBS vs. Propionate). The model will test if the change over time is different between your two groups (the time * treatment_group interaction).
+
+- Random Effect: This is what makes the model perfect for your data. By adding mouse_id as a random effect, you are telling the model that the two measurements from Mouse_1 are related to each other, and not independent like the measurements from Mouse_2. It correctly pairs the pre- and post-treatment samples for each mouse. 
+
+```{r}
+library(lmerTest) 
+# Load pathway abundance data (from path_abun_unstrat.tsv)
+path_abun <- read.table("../data/picrust2_out_steady/pathways_out/path_abun_unstrat.tsv.gz", 
+                        header = TRUE, 
+                        sep = "\t", 
+                        row.names = 1, 
+                        check.names = FALSE)
+
+path_abun_relative <- as.data.frame(prop.table(as.matrix(path_abun), margin = 2))
+
+# Scale to Counts Per Million (CPM) for better log-transformation behavior
+path_abun_cpm <- path_abun_relative * 1000000
+
+# Prepare and Merge the Data
+
+path_abun_t <- as.data.frame(t(path_abun_cpm))
+
+# Add a SampleID column from the row names
+path_abun_t$SampleID <- rownames(path_abun_t)
+
+# Pivot the abundance data from wide to long format
+path_abun_long <- path_abun_t %>%
+  pivot_longer(
+    cols = -SampleID, # Pivot all columns except SampleID
+    names_to = "Pathway",
+    values_to = "CPM"
+  )
+
+# Now, merge the long abundance data with the metadata
+# This creates one master data frame for analysis
+data_full <- left_join(path_abun_long, metadata, by = "SampleID") 
+
+#  TRANSFORM and RUN LME model
+
+data_full$log_cpm <- log2(data_full$CPM + 1)
+```
+
+
+```{r}
+# Group by pathway and run the LME model on the transformed data
+lme_results <- data_full %>%
+  group_by(Pathway) %>%
+  do({
+    model <- lmer(log_cpm ~ Timepoint * Treatment + (1 | MouseID), data = .)
+    coeffs <- as.data.frame(summary(model)$coefficients)
+    interaction_row <- coeffs[rownames(coeffs) == "Timepointpost:Treatmentpropionate", ]
+    data.frame(
+      Estimate = interaction_row$Estimate,# The Estimate is a log fold change because we analyzed log-transformed data
+      P_value = interaction_row$`Pr(>|t|)`
+    )
+  }) %>%
+  ungroup()
+# boundary (singular) fit: see help('isSingular'): This warning means the model found that for certain pathways, the variation between individual mice was zero. This is common for rare or low-variance pathways. It is not a critical error, and the results for your main question (the effect of Timepoint * Treatment) are still considered reliable.
+
+# Adjust P-values
+lme_results_final <- lme_results %>%
+  mutate(FDR = p.adjust(P_value, method = "BH")) %>%
+  arrange(FDR)
+
+# View the final, correct results
+head(lme_results_final)
+
+```
+
+```{r}
+# Define thresholds for significance and effect size
+fdr_threshold <- 0.05
+estimate_threshold <- 2.0 # You can adjust this threshold for labeling
+
+plot_data <- lme_results_final %>%
+  mutate(
+    # Create a column for coloring points based on significance and direction
+    significance = case_when(
+      FDR < fdr_threshold & Estimate > estimate_threshold  ~ "Increased",
+      FDR < fdr_threshold & Estimate < -estimate_threshold ~ "Decreased",
+      TRUE                                             ~ "Not Significant"
+    ),
+    # Create a column for labeling only the most interesting points
+    label = ifelse(FDR < fdr_threshold & abs(Estimate) > estimate_threshold, Pathway, "")
+  )
+
+# Step 3: Create the Volcano Plot with ggplot2
+volcano_plot <- ggplot(plot_data, aes(x = Estimate, y = -log10(FDR))) +
+  # Add points, colored by our new 'significance' column
+  geom_point(aes(color = significance), alpha = 0.7, size = 2.5) +
+  
+  # Add non-overlapping text labels for the top pathways using ggrepel
+  geom_text_repel(aes(label = label), 
+                  box.padding = 0.5, 
+                  point.padding = 0.5,
+                  max.overlaps = Inf, # Allow all labels to be plotted
+                  segment.color = 'grey50',
+                  size = 3.5) +
+  
+  # Define the custom colors for our groups
+  scale_color_manual(values = c("Increased" = "#d62728", 
+                                "Decreased" = "#1f77b4", 
+                                "Not Significant" = "grey80")) +
+  
+  # Add vertical lines for the effect size (Estimate) threshold
+  geom_vline(xintercept = c(-estimate_threshold, estimate_threshold), linetype = "dashed", color = "grey50") +
+  
+  # Add a horizontal line for the FDR significance threshold
+  geom_hline(yintercept = -log10(fdr_threshold), linetype = "dashed", color = "grey50") +
+  
+  # Add labels and titles
+  labs(
+    title = "Propionate Treatment vs. PBS Control",
+    subtitle = "Changes in Microbial Metabolic Pathways",
+    x = "Log2 Fold Change (Estimate)",
+    y = "-log10(FDR)",
+    color = "Significance"
+  ) +
+  
+  # Apply a clean, publication-ready theme
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+
+```{r}
+### visualize the log2 counts of the sig pathways
+top_pathways <- plot_data %>%
+  filter(significance != 'Not Significant') %>% 
+  arrange(desc(significance)) %>%       # Sort by FDR to get the most significant
+  pull(Pathway)          # Extract the pathway names into a vector
+
+# Step 2: Filter the main data frame for only these top pathways
+plot_data <- data_full %>%
+  filter(Pathway %in% top_pathways) %>%
+  # Important for ordering the grid: convert Pathway to a factor based on significance
+  mutate(Pathway = factor(Pathway, levels = top_pathways))
+
+# Step 3: Create the faceted plot
+# The core is the same, but we add `facet_wrap()` at the end.
+faceted_interaction_plot <- ggplot(plot_data, 
+                                   aes(x = Timepoint, y = log_cpm, group = MouseID, color = Treatment)) +
+  
+  # Add lines for each mouse
+  geom_line(alpha = 0.4, size = 0.8) +
+  
+  # Add points for each measurement
+  geom_point(alpha = 0.7, size = 1.5) +
+  
+  # Add a thicker line showing the AVERAGE trend for each treatment group
+  stat_summary(aes(group = Treatment), fun = mean, geom = "line", size = 1.5, linetype = 'dashed') +
+  
+  # Use consistent colors
+  scale_color_manual(values = c("pbs" = "#1f77b4", "propionate" = "#d62728")) +
+  
+  # *** THE KEY STEP: Create a grid of plots ***
+  # `~ Pathway` tells ggplot to make a panel for each pathway.
+  # `ncol = 4` arranges them into a grid with 4 columns.
+  # `scales = "fixed"` ensures the Y-axis is the same for all panels, which is crucial for comparison.
+  facet_wrap(~ Pathway, ncol = 6, scales = "fixed") +
+  
+  # Add informative labels and a title
+  labs(
+    title = "Significant Pathways: Pre vs. Post Treatment",
+    subtitle = "Individual mouse trajectories shown, with group averages in bold",
+    x = "Timepoint",
+    y = "Log2(CPM + 1) Abundance",
+    color = "Treatment Group"
+  ) +
+  
+  # Apply a theme suitable for a faceted plot
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 8) # Style the facet titles
+  )
+
+# Step 4: Display the plot
+ggsave('../results/01_steady_sig_samples_viz.jpg', width = 12)
+
+```
+
+
+### the stratified output
+
+```{r}
+# Load the taxonomy file exported from QIIME2
+# We need to do some cleaning to separate the taxonomy string into levels
+tax_raw <- read_tsv("../data/ASV_tax_assignments_steady.txt", col_names = c('taxon','Taxon','X3','X4')) 
+  
+tax <- tax_raw %>%
+  # Separate the long taxon string into taxonomic ranks
+  separate(Taxon, into = c("k", "p", "c", "o", "f", "g", "s"), sep = ";") %>%
+  # Clean up the names (e.g., remove "g__")
+  mutate(g = str_remove(g, "g__")) %>%
+  select(taxon, Genus = g) # Keep only the Genus level for this plot
+
+# Load the large taxon contribution file
+contrib <- read_tsv('../data/picrust2_out_steady/pathways_out/path_abun_contrib.tsv.gz') %>% rename_with(~ "function_", .cols = 2)
+
+# --- Step 2: Define Key Pathways and Prepare the Data ---
+
+# Define the pathways we want to visualize
+pathways_of_interest <- c(
+  "PWY-7282", # Vitamin B1 Synthesis (Increased)
+  "PWY-4984", # Urea Cycle / N-Recycling (Increased)
+  "PWY-6263"  # Vitamin K2 Synthesis (Decreased)
+)
+
+# Filter the contribution file for our pathways and merge with taxonomy and metadata
+plot_data_prep <- contrib %>%
+  filter(function_ %in% pathways_of_interest) %>%
+  left_join(tax, by = "taxon") %>%
+  # If a taxon has no genus assigned, label it "Unassigned"
+  mutate(Genus = ifelse(Genus == 'NA' | Genus == "", "Unassigned", Genus)) %>%
+  left_join(metadata, by = c("sample" = "SampleID"))
+
+# --- Step 3: Summarize Data for Plotting ---
+# The key value, taxon_function_abun, is calculated by multiplying the raw count of a microbe by its predicted gene copy number for that function. This gives you a single number representing that microbe's total functional contribution to a pathway in your sample.
+
+# Find the top 10 most influential genera across all samples/pathways to keep the plot clean
+top_genera <- plot_data_prep %>%
+  group_by(Genus) %>%
+  summarise(total_contrib = sum(taxon_function_abun)) %>%
+  arrange(desc(total_contrib)) %>%
+  slice_head(n =10) %>%
+  pull(Genus)
+
+# Summarize the data, grouping minor genera into an "Other" category
+summary_data <- plot_data_prep %>%
+  # Group everything not in our top list into "Other"
+  mutate(Genus = ifelse(Genus %in% top_genera, Genus, "Other")) %>%
+  # Group by our experimental variables and the new Genus column
+  group_by(Treatment, Timepoint, Pathway = function_, Genus) %>%
+  # Calculate the total contribution for each genus in each group
+  summarise(avg_contribution = mean(taxon_function_abun), .groups = 'drop') %>%
+  # Set the order of Timepoint for the plot
+  mutate(Timepoint = factor(Timepoint, levels = c("pre", "post")))
+
+
+# --- Step 4: Create the Faceted Stacked Bar Plot ---
+
+contribution_plot <- ggplot(summary_data, aes(x = Treatment, y = avg_contribution, fill = Genus)) +
+  # Create the stacked bars
+  geom_bar(stat = "identity", position = "stack") +
+  
+  # Split the plot into panels for each Timepoint (Pre vs. Post)
+  facet_grid(Pathway ~ Timepoint, scales = "free_y") +
+  
+  # Use a color-blind friendly palette with enough colors for top genera + "Other"
+  scale_fill_brewer(palette = "Paired") +
+  
+  # Add labels and titles
+  labs(
+    title = "Key Microbial Contributors to Metabolic Pathways",
+    subtitle = "Comparing Pre- vs. Post-Treatment in PBS and Propionate Groups",
+    x = "Treatment Group",
+    y = "Average Pathway Abundance (Contribution)",
+    fill = "Contributing Genus"
+  ) +
+   
+  # Apply a clean theme
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "bottom",
+    strip.text.x = element_text(face = "bold"),
+    strip.text.y = element_text(face = "bold", size = 8),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Display the plot
+print(contribution_plot)
+
+ggsave('../results/01_steady_3_pw_genus.jpg', width = 10, height = 9)
+```
+
+## transplant experiment
+
+```{r}
+sample_names <- combined_pathway_data %>% filter(exp == 'transplant') %>% distinct(sample_id) %>% pull(sample_id)
+
+metadata_df <- tibble(SampleID = sample_names) %>%
+  # The separate() function is perfect for splitting a column by a delimiter.
+  # Here, we split the 'SampleID' column into three new columns using "_" as the separator.
+  separate(
+    SampleID, 
+    into = c("Timepoint", "Treatment", "MouseNumber"), 
+    sep = "_",
+    remove = FALSE # This keeps the original SampleID column, which is good practice
+  ) %>%
+  # Create a unique MouseID by combining the treatment group and mouse number.
+  # This is important for pairing the pre/post samples correctly in a mixed-effects model.
+  mutate(
+    MouseID = paste(Treatment, MouseNumber, sep = "_")
+  ) %>%
+  # Optional: Reorder the columns for better readability
+  select(SampleID, MouseID, Treatment, Timepoint, MouseNumber) %>% 
+  mutate(Timepoint = factor(Timepoint, levels = c('pre','post')) )
+```
+
+```{r}
+library(lmerTest) # For p-values in our mixed-effects models
+
+# --- Step 1: Load and Prepare Data ---
+
+# Load the metadata 
+meta <- metadata_df
+
+# Load pathway abundance data (from path_abun_unstrat.tsv.gz)
+path_abun <- combined_pathway_data %>% filter(exp == 'transplant')
+```
+
+
+```{r}
+# --- Step 2: Normalize and Transform ---
+
+# Convert raw counts to relative abundance, then to CPM, then log2 transform
+path_abun_processed <- path_abun %>%
+  group_by(sample_id) %>%
+  # Normalize to relative abundance (Total Sum Scaling)
+  mutate(rel_abun = abundance / sum(abundance)) %>%
+  # Scale to Counts Per Million and log2 transform
+  mutate(log2_cpm = log2((rel_abun * 1000000) + 1)) %>%
+  select(SampleID = sample_id, Pathway = 2, log2_cpm) %>%
+  ungroup()
+
+# --- Step 3: Merge and Run LME Model ---
+
+# Join the processed abundance data with the metadata
+data_full <- inner_join(path_abun_processed, meta, by = "SampleID")
+```
+
+
+```{r}
+# VERY IMPORTANT: For the primary statistical test, we only compare Propionate vs. PBS.
+# The TCD group is a benchmark, not part of this initial comparison.
+data_for_lme <- data_full %>%
+  filter(Treatment %in% c("pbs", "propionate")) %>% 
+  mutate(Treatment = factor(Treatment, levels = c('pbs','propionate')))
+
+# Run the LME model for every pathway
+lme_results <- data_for_lme %>%
+  group_by(Pathway) %>%
+  do({
+    # The model tests if the change over time is different between the two treatment groups
+    model <- lmer(log2_cpm ~ Timepoint * Treatment + (1 | MouseID), data = .)
+    coeffs <- as.data.frame(summary(model)$coefficients)
+    
+    # Extract the result for the interaction term
+    # This term directly tests our hypothesis for each pathway
+    interaction_row <- coeffs[rownames(coeffs) == "Timepointpost:Treatmentpropionate", ] 
+    
+    data.frame(
+      Estimate = interaction_row$Estimate,
+      P_value = interaction_row$`Pr(>|t|)`
+    )
+  }) %>%
+  ungroup()
+
+# --- Step 4: Adjust P-values and Visualize ---
+
+# Adjust for multiple testing using the Benjamini-Hochberg (FDR) method
+lme_results_final <- lme_results %>%
+  mutate(FDR = p.adjust(P_value, method = "BH")) %>%
+  arrange(FDR)
+
+# View top results
+head(lme_results_final)
+
+# Next Steps: Create Volcano plots and Faceted Interaction plots using the code
+# from our previous conversation, making sure to include the TCD group in the 
+# visualization data to see how it compares.
+
+
+```
+### volcano and abundance 
+
+```{r}
+# Define thresholds for significance and effect size
+fdr_threshold <- 0.05
+estimate_threshold <- 2.0
+
+plot_data <- lme_results_final %>%
+  mutate(
+    # Create a column for coloring points based on significance and direction
+    significance = case_when(
+      FDR < fdr_threshold & Estimate > estimate_threshold  ~ "Increased",
+      FDR < fdr_threshold & Estimate < -estimate_threshold ~ "Decreased",
+      TRUE                                             ~ "Not Significant"
+    ),
+    # Create a column for labeling only the most interesting points
+    label = ifelse(FDR < fdr_threshold & abs(Estimate) > estimate_threshold, Pathway, "")
+  )
+
+# Step 3: Create the Volcano Plot with ggplot2
+volcano_plot <- ggplot(plot_data, aes(x = Estimate, y = -log10(FDR))) +
+  # Add points, colored by our new 'significance' column
+  geom_point(aes(color = significance), alpha = 0.7, size = 2.5) +
+  
+  # Add non-overlapping text labels for the top pathways using ggrepel
+  geom_text_repel(aes(label = label), 
+                  box.padding = 0.5, 
+                  point.padding = 0.5,
+                  max.overlaps = Inf, # Allow all labels to be plotted
+                  segment.color = 'grey50',
+                  size = 3.5) +
+  
+  # Define the custom colors for our groups
+  scale_color_manual(values = c("Increased" = "#d62728", 
+                                "Decreased" = "#1f77b4", 
+                                "Not Significant" = "grey80")) +
+  
+  # Add vertical lines for the effect size (Estimate) threshold
+  geom_vline(xintercept = c(-estimate_threshold, estimate_threshold), linetype = "dashed", color = "grey50") +
+  
+  # Add a horizontal line for the FDR significance threshold
+  geom_hline(yintercept = -log10(fdr_threshold), linetype = "dashed", color = "grey50") +
+  
+  # Add labels and titles
+  labs(
+    title = "Propionate Treatment vs. PBS Control in transplant mice",
+    subtitle = "Changes in Microbial Metabolic Pathways",
+    x = "Log2 Fold Change (Estimate)",
+    y = "-log10(FDR)",
+    color = "Significance"
+  ) +
+  
+  # Apply a clean, publication-ready theme
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+
+
+### the abundance interaction plot
+top_pathways <- plot_data %>%
+  filter(significance != 'Not Significant') %>% 
+  arrange(desc(significance)) %>%       # Sort by FDR to get the most significant
+  pull(Pathway)          # Extract the pathway names into a vector
+
+# Step 2: Filter the main data frame for only these top pathways
+plot_data <- data_full %>%
+  filter(Pathway %in% top_pathways) %>%
+  # Important for ordering the grid: convert Pathway to a factor based on significance
+  mutate(Pathway = factor(Pathway, levels = top_pathways)) 
+
+# Step 3: Create the faceted plot
+# The core is the same, but we add `facet_wrap()` at the end.
+faceted_interaction_plot <- ggplot(plot_data, 
+                                   aes(x = Timepoint, y = log2_cpm, group = MouseID, color = Treatment)) +
+  
+  # Add lines for each mouse
+  geom_line(alpha = 0.4, size = 0.8) +
+  
+  # Add points for each measurement
+  geom_point(alpha = 0.7, size = 1.5) +
+  
+  # Add a thicker line showing the AVERAGE trend for each treatment group
+  stat_summary(aes(group = Treatment), fun = mean, geom = "line", size = 1.5, linetype = 'dashed') +
+  
+  # Use consistent colors
+  scale_color_manual(values = c("pbs" = "#1f77b4", "propionate" = "#d62728", "tcd" = "black")) +
+  
+  # *** THE KEY STEP: Create a grid of plots ***
+  # `~ Pathway` tells ggplot to make a panel for each pathway.
+  # `ncol = 4` arranges them into a grid with 4 columns.
+  # `scales = "fixed"` ensures the Y-axis is the same for all panels, which is crucial for comparison.
+  facet_wrap(~ Pathway, ncol = 3, scales = "fixed") +
+  
+  # Add informative labels and a title
+  labs(
+    title = "Significant Pathways: Pre vs. Post Treatment",
+    subtitle = "Individual mouse trajectories shown, with group averages in bold",
+    x = "Timepoint",
+    y = "Log2(CPM + 1) Abundance",
+    color = "Treatment Group"
+  ) +
+  
+  # Apply a theme suitable for a faceted plot
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 8) # Style the facet titles
+  )
+
+faceted_interaction_plot
+```
+
+### the genus contribution
+
+```{r}
+# We need to do some cleaning to separate the taxonomy string into levels
+tax_raw <- read_tsv("../data/ASV_tax_assignments_transplant.txt", col_names = c('taxon','Taxon','X3','X4')) 
+  
+tax <- tax_raw %>%
+  # Separate the long taxon string into taxonomic ranks
+  separate(Taxon, into = c("k", "p", "c", "o", "f", "g", "s"), sep = ";") %>%
+  # Clean up the names (e.g., remove "g__")
+  mutate(g = str_remove(g, "g__")) %>%
+  select(taxon, Genus = g) # Keep only the Genus level for this plot
+
+# Load the large taxon contribution file
+contrib <- read_tsv('../data/picrust2_out_transplant//pathways_out/path_abun_contrib.tsv.gz') %>% rename_with(~ "function_", .cols = 2)
+
+# --- Step 2: Define Key Pathways and Prepare the Data ---
+
+# Define the pathways we want to visualize
+pathways_of_interest <- top_pathways
+
+# Filter the contribution file for our pathways and merge with taxonomy and metadata
+plot_data_prep <- contrib %>%
+  filter(function_ %in% pathways_of_interest) %>%
+  left_join(tax, by = "taxon") %>%
+  # If a taxon has no genus assigned, label it "Unassigned"
+  mutate(Genus = ifelse(Genus == 'NA' | Genus == "", "Unassigned", Genus)) %>%
+  left_join(meta, by = c("sample" = "SampleID")) 
+
+
+# --- Step 3: Summarize Data for Plotting ---
+# The key value, taxon_function_abun, is calculated by multiplying the raw count of a microbe by its predicted gene copy number for that function. This gives you a single number representing that microbe's total functional contribution to a pathway in your sample.
+
+# Find the top 10 most influential genera across all samples/pathways to keep the plot clean
+top_genera <- plot_data_prep %>%
+  group_by(Genus) %>%
+  summarise(total_contrib = sum(taxon_function_abun)) %>%
+  arrange(desc(total_contrib)) %>%
+  slice_head(n =10) %>%
+  pull(Genus)
+
+# Summarize the data, grouping minor genera into an "Other" category
+summary_data <- plot_data_prep %>%
+  # Group everything not in our top list into "Other"
+  mutate(Genus = ifelse(Genus %in% top_genera, Genus, "Other")) %>%
+  # Group by our experimental variables and the new Genus column
+  group_by(Treatment, Timepoint, Pathway = function_, Genus) %>%
+  # Calculate the total contribution for each genus in each group
+  summarise(avg_contribution = mean(taxon_function_abun), .groups = 'drop') %>%
+  # Set the order of Timepoint for the plot
+  mutate(Timepoint = factor(Timepoint, levels = c("pre", "post")))
+
+
+# --- Step 4: Create the Faceted Stacked Bar Plot ---
+
+contribution_plot <- ggplot(summary_data, aes(x = Treatment, y = avg_contribution, fill = Genus)) +
+  # Create the stacked bars
+  geom_bar(stat = "identity", position = "stack") +
+  
+  # Split the plot into panels for each Timepoint (Pre vs. Post)
+  facet_grid(Pathway ~ Timepoint, scales = "free_y") +
+  
+  # Use a color-blind friendly palette with enough colors for top genera + "Other"
+  scale_fill_brewer(palette = "Paired") +
+  
+  # Add labels and titles
+  labs(
+    title = "Key Microbial Contributors to Metabolic Pathways in transplant mice",
+    subtitle = "Comparing Pre- vs. Post-Treatment in PBS and Propionate Groups",
+    x = "Treatment Group",
+    y = "Average Pathway Abundance (Contribution)",
+    fill = "Contributing Genus"
+  ) +
+   
+  # Apply a clean theme
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "left",
+    strip.text.x = element_text(face = "bold"),
+    strip.text.y = element_text(face = "bold", size = 8),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Display the plot
+print(contribution_plot)
+ggsave('../results/01_transplant_3_pw_genus.jpg', width = 8, height = 6)
+```
+
