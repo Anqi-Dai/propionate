@@ -1083,3 +1083,99 @@ permanova_result <- adonis2(dist_obj ~ Timepoint * Treatment, data = meta_for_pe
 print(permanova_result)
 ```
 
+### Identify the "Propionate-Signature" Bacteria 
+
+```{r}
+library(DESeq2)
+
+# --- Load and Format Data ---
+
+# Load the ASV count data from the exported .biom file
+# The file path will be inside the folder you exported to.
+count_table <- read_csv("../data/transplant_ASV_Abundance_Table.csv" ) %>%  column_to_rownames('seqs')
+# Convert the biom object to a standard numeric matrix
+count_matrix <- as.matrix(count_table) %>% t()
+
+colnames(count_matrix) <- tolower(str_replace_all(colnames(count_matrix), "\\.", "_"))
+
+# Load the taxonomy data
+tax_raw <- read_tsv("../data/ASV_tax_assignments_transplant.txt", col_names = F)
+tax_clean <- tax_raw %>%
+  dplyr::rename(ASV = X1) %>%
+  # Separate the long taxon string into ranks for easier labeling later
+  separate(X2, into = c("k", "p", "c", "o", "f", "g", "s"), sep = ";") %>%
+  # Clean up the names (e.g., remove "g__")
+  mutate(g = str_remove(g, "g__"),
+         s = str_remove(s, "s__"),
+         f = str_remove(f, "f__")) %>%
+  select(ASV, Family = f, Genus = g, Species = s)
+```
+
+
+```{r}
+# --- Prepare Data for DESeq2 ---
+
+# The goal is to find the signature bacteria AFTER treatment.
+# So, we will filter our data to only include the 'post' samples.
+meta_post <- meta %>%
+  mutate(Timepoint = as.character(Timepoint)) %>% 
+  filter(Timepoint == "post")
+
+# The columns in the count matrix must be in the same order as the rows in the metadata.
+# This reorders the count matrix columns to match the metadata.
+count_matrix_post <- count_matrix[, meta_post$SampleID]
+
+# --- Run DESeq2 Analysis ---
+
+# Create the DESeqDataSet object. This object bundles the counts,
+# metadata, and the experimental design for the analysis.
+# The design `~ Treatment` tells DESeq2 to find differences based on the Treatment column.
+dds <- DESeqDataSetFromMatrix(
+  countData = count_matrix_post,
+  colData = meta_post,
+  design = ~ Treatment
+)
+
+# Run the main DESeq2 function. This performs normalization, dispersion estimation,
+# and fits the model to find differentially abundant features.
+dds_result <- DESeq(dds)
+
+# Get the results for our comparison of interest: propionate vs. the PBS control.
+# A positive log2FoldChange means the ASV is more abundant in the propionate group.
+res <- results(dds_result, contrast = c("Treatment", "propionate", "pbs"))
+
+# Convert the results to a tidy data frame for plotting
+res_df <- as.data.frame(res) %>%
+  rownames_to_column(var = "ASV") %>%
+  # Add the taxonomy information to our results
+  left_join(tax_clean, by = "ASV") %>%
+  # Filter for statistically significant results (FDR < 0.05)
+  filter(padj < 0.05) %>%
+  # Sort by the fold change to see the biggest differences first
+  arrange(desc(log2FoldChange))
+
+# --- Visualize the Results ---
+
+# Create a clean label for the plot, using Genus and ASV ID.
+res_df <- res_df %>%
+  mutate(PlotLabel = str_glue('f_{Family}|g_{Genus}|s_{Species} ({ASV})'))
+
+# Create a "dot plot" of the top 20 signature ASVs
+signature_plot <- ggplot(head(res_df, 20), aes(x = log2FoldChange, y = reorder(PlotLabel, log2FoldChange))) +
+  geom_point(aes(color = log2FoldChange, size = -log10(padj)), alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_color_gradient2(low = "#1f77b4", mid = "grey", high = "#d62728", midpoint = 0) +
+  labs(
+    title = "Top Propionate-Signature Bacteria (vs. PBS)",
+    subtitle = "Analysis of post-treatment samples",
+    x = "Log2 Fold Change (More abundant in Propionate ->)",
+    y = "ASV (annotated with Genus)",
+    color = "Log2 Fold Change",
+    size = "Significance (-log10 FDR)"
+  ) +
+  theme_minimal()
+
+# Display the plot
+print(signature_plot)
+```
+
