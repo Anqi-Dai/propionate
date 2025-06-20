@@ -1044,7 +1044,42 @@ print(pcoa_plot)
 ```
 
 ```{r}
-# permanova test
+#  Statistical Testing with PERMANOVA ---
+# This test will tell us if the group centroids are statistically different,
+# even if the points overlap visually.
 
+# Load the distance matrix
+dist_matrix_raw <- read_tsv("../data/bray_curtis_dm_transplant.txt") 
+
+cleaned_colnames <- tolower(str_replace_all(colnames(dist_matrix_raw)[-1], "\\.", "_"))
+
+dist_matrix_clean <- dist_matrix_raw %>% 
+  # Clean the first column
+  mutate(across(1, ~ tolower(str_replace_all(.x, "\\.", "_")))) %>%
+  # Set that cleaned first column as the row names
+  column_to_rownames(var = colnames(dist_matrix_raw)[1])
+
+# Assign the cleaned column names
+colnames(dist_matrix_clean) <- cleaned_colnames
+
+# Convert the cleaned data frame into a 'dist' object for the vegan package
+dist_obj <- as.dist(dist_matrix_clean)
+
+# It's critical that the metadata rows are in the same order as the distance matrix.
+# This code reorders the metadata to match the distance matrix labels perfectly.
+meta_for_permanova <- meta %>%
+  dplyr::slice(match(labels(dist_obj), SampleID)) 
+```
+
+
+```{r}
+library(vegan)
+# Run the PERMANOVA test 
+# We use the formula `dist_matrix ~ Timepoint * Treatment` to test the interaction.
+# This asks: "Is the trajectory of community change different between the treatment groups?"
+permanova_result <- adonis2(dist_obj ~ Timepoint * Treatment, data = meta_for_permanova, by = "terms")
+
+# Display the results
+print(permanova_result)
 ```
 
