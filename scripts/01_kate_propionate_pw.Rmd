@@ -95,13 +95,13 @@ combined_pathway_data <- pw_dfs %>%
                    ),
                  .id = "exp")
  
-# 2. Calculate the total abundance for each unique pathway across all samples
+#  Calculate the total abundance for each unique pathway across all samples
 total_pathway_abundance <- combined_pathway_data %>%
   group_by(pathway) %>%
   summarise(total_abundance = sum(abundance, na.rm = TRUE)) %>% # Sum abundances for each pathway
   ungroup() # Ungroup for subsequent operations if any
 
-# 3. Visualize the distribution of total pathway abundances using a histogram
+#  Visualize the distribution of total pathway abundances using a histogram
 
 ggplot(total_pathway_abundance, aes(x = total_abundance)) +
   geom_histogram(binwidth = 100000, # Adjust binwidth based on the data's range
@@ -131,7 +131,7 @@ total_sample_abundance <- combined_pathway_data %>%
   summarise(total_abundance = sum(abundance, na.rm = TRUE)) %>% # Sum abundances for each sample
   ungroup() # Ungroup for subsequent operations if any
 
-# 3. Visualize the distribution of total sample abundances using a histogram
+#  Visualize the distribution of total sample abundances using a histogram
 
 ggplot(total_sample_abundance, aes(x = total_abundance)) +
   geom_histogram(binwidth = 1000000, 
@@ -158,7 +158,7 @@ ggplot(total_sample_abundance, aes(x = total_abundance)) +
 ```
 
 ```{r}
-# 3. Visualize the total abundance of all pathways in each sample as bars,
+#  Visualize the total abundance of all pathways in each sample as bars,
 ggplot(total_sample_abundance, aes(x = forcats::fct_reorder(sample_id, sample_id, .fun = function(x) as.numeric(factor(x))), # Sorts alphabetically
                                    y = total_abundance,
                                    fill = exp)) +
@@ -235,7 +235,7 @@ input_metadata <- metadata %>%
 stopifnot(all(rownames(input_data) == rownames(input_metadata)))
 
 
-# --- 5. Run MaAsLin2 Analysis ---
+#  Run MaAsLin2 Analysis ---
 fit_data <- Maaslin2(
     input_data = input_data,
     input_metadata = input_metadata,
@@ -420,7 +420,7 @@ plot_data <- lme_results_final %>%
     label = ifelse(FDR < fdr_threshold & abs(Estimate) > estimate_threshold, Pathway, "")
   )
 
-# Step 3: Create the Volcano Plot with ggplot2
+# Create the Volcano Plot with ggplot2
 volcano_plot <- ggplot(plot_data, aes(x = Estimate, y = -log10(FDR))) +
   # Add points, colored by our new 'significance' column
   geom_point(aes(color = significance), alpha = 0.7, size = 2.5) +
@@ -470,13 +470,13 @@ top_pathways <- plot_data %>%
   arrange(desc(significance)) %>%       # Sort by FDR to get the most significant
   pull(Pathway)          # Extract the pathway names into a vector
 
-# Step 2: Filter the main data frame for only these top pathways
+#  Filter the main data frame for only these top pathways
 plot_data <- data_full %>%
   filter(Pathway %in% top_pathways) %>%
   # Important for ordering the grid: convert Pathway to a factor based on significance
   mutate(Pathway = factor(Pathway, levels = top_pathways))
 
-# Step 3: Create the faceted plot
+#  Create the faceted plot
 # The core is the same, but we add `facet_wrap()` at the end.
 faceted_interaction_plot <- ggplot(plot_data, 
                                    aes(x = Timepoint, y = log_cpm, group = MouseID, color = Treatment)) +
@@ -517,7 +517,7 @@ faceted_interaction_plot <- ggplot(plot_data,
     strip.text = element_text(face = "bold", size = 8) # Style the facet titles
   )
 
-# Step 4: Display the plot
+#  Display the plot
 ggsave('../results/01_steady_sig_samples_viz.jpg', width = 12)
 
 ```
@@ -540,7 +540,7 @@ tax <- tax_raw %>%
 # Load the large taxon contribution file
 contrib <- read_tsv('../data/picrust2_out_steady/pathways_out/path_abun_contrib.tsv.gz') %>% rename_with(~ "function_", .cols = 2)
 
-# --- Step 2: Define Key Pathways and Prepare the Data ---
+#  Define Key Pathways and Prepare the Data ---
 
 # Define the pathways we want to visualize
 pathways_of_interest <- c(
@@ -557,7 +557,7 @@ plot_data_prep <- contrib %>%
   mutate(Genus = ifelse(Genus == 'NA' | Genus == "", "Unassigned", Genus)) %>%
   left_join(metadata, by = c("sample" = "SampleID"))
 
-# --- Step 3: Summarize Data for Plotting ---
+#  Summarize Data for Plotting ---
 # The key value, taxon_function_abun, is calculated by multiplying the raw count of a microbe by its predicted gene copy number for that function. This gives you a single number representing that microbe's total functional contribution to a pathway in your sample.
 
 # Find the top 10 most influential genera across all samples/pathways to keep the plot clean
@@ -580,7 +580,7 @@ summary_data <- plot_data_prep %>%
   mutate(Timepoint = factor(Timepoint, levels = c("pre", "post")))
 
 
-# --- Step 4: Create the Faceted Stacked Bar Plot ---
+#  Create the Faceted Stacked Bar Plot ---
 
 contribution_plot <- ggplot(summary_data, aes(x = Treatment, y = avg_contribution, fill = Genus)) +
   # Create the stacked bars
@@ -645,7 +645,7 @@ metadata_df <- tibble(SampleID = sample_names) %>%
 ```{r}
 library(lmerTest) # For p-values in our mixed-effects models
 
-# --- Step 1: Load and Prepare Data ---
+#  Load and Prepare Data ---
 
 # Load the metadata 
 meta <- metadata_df
@@ -656,7 +656,7 @@ path_abun <- combined_pathway_data %>% filter(exp == 'transplant')
 
 
 ```{r}
-# --- Step 2: Normalize and Transform ---
+#  Normalize and Transform ---
 
 # Convert raw counts to relative abundance, then to CPM, then log2 transform
 path_abun_processed <- path_abun %>%
@@ -668,7 +668,7 @@ path_abun_processed <- path_abun %>%
   select(SampleID = sample_id, Pathway = 2, log2_cpm) %>%
   ungroup()
 
-# --- Step 3: Merge and Run LME Model ---
+#  Merge and Run LME Model ---
 
 # Join the processed abundance data with the metadata
 data_full <- inner_join(path_abun_processed, meta, by = "SampleID")
@@ -701,7 +701,7 @@ lme_results <- data_for_lme %>%
   }) %>%
   ungroup()
 
-# --- Step 4: Adjust P-values and Visualize ---
+#  Adjust P-values and Visualize ---
 
 # Adjust for multiple testing using the Benjamini-Hochberg (FDR) method
 lme_results_final <- lme_results %>%
@@ -710,10 +710,6 @@ lme_results_final <- lme_results %>%
 
 # View top results
 head(lme_results_final)
-
-# Next Steps: Create Volcano plots and Faceted Interaction plots using the code
-# from our previous conversation, making sure to include the TCD group in the 
-# visualization data to see how it compares.
 
 
 ```
@@ -736,7 +732,7 @@ plot_data <- lme_results_final %>%
     label = ifelse(FDR < fdr_threshold & abs(Estimate) > estimate_threshold, Pathway, "")
   )
 
-# Step 3: Create the Volcano Plot with ggplot2
+#  Create the Volcano Plot with ggplot2
 volcano_plot <- ggplot(plot_data, aes(x = Estimate, y = -log10(FDR))) +
   # Add points, colored by our new 'significance' column
   geom_point(aes(color = significance), alpha = 0.7, size = 2.5) +
@@ -784,13 +780,13 @@ top_pathways <- plot_data %>%
   arrange(desc(significance)) %>%       # Sort by FDR to get the most significant
   pull(Pathway)          # Extract the pathway names into a vector
 
-# Step 2: Filter the main data frame for only these top pathways
+#  Filter the main data frame for only these top pathways
 plot_data <- data_full %>%
   filter(Pathway %in% top_pathways) %>%
   # Important for ordering the grid: convert Pathway to a factor based on significance
   mutate(Pathway = factor(Pathway, levels = top_pathways)) 
 
-# Step 3: Create the faceted plot
+#  Create the faceted plot
 # The core is the same, but we add `facet_wrap()` at the end.
 faceted_interaction_plot <- ggplot(plot_data, 
                                    aes(x = Timepoint, y = log2_cpm, group = MouseID, color = Treatment)) +
@@ -850,7 +846,7 @@ tax <- tax_raw %>%
 # Load the large taxon contribution file
 contrib <- read_tsv('../data/picrust2_out_transplant//pathways_out/path_abun_contrib.tsv.gz') %>% rename_with(~ "function_", .cols = 2)
 
-# --- Step 2: Define Key Pathways and Prepare the Data ---
+#  Define Key Pathways and Prepare the Data ---
 
 # Define the pathways we want to visualize
 pathways_of_interest <- top_pathways
@@ -864,7 +860,7 @@ plot_data_prep <- contrib %>%
   left_join(meta, by = c("sample" = "SampleID")) 
 
 
-# --- Step 3: Summarize Data for Plotting ---
+#  Summarize Data for Plotting ---
 # The key value, taxon_function_abun, is calculated by multiplying the raw count of a microbe by its predicted gene copy number for that function. This gives you a single number representing that microbe's total functional contribution to a pathway in your sample.
 
 # Find the top 10 most influential genera across all samples/pathways to keep the plot clean
@@ -887,7 +883,7 @@ summary_data <- plot_data_prep %>%
   mutate(Timepoint = factor(Timepoint, levels = c("pre", "post")))
 
 
-# --- Step 4: Create the Faceted Stacked Bar Plot ---
+# Create the Faceted Stacked Bar Plot ---
 
 contribution_plot <- ggplot(summary_data, aes(x = Treatment, y = avg_contribution, fill = Genus)) +
   # Create the stacked bars
@@ -922,5 +918,133 @@ contribution_plot <- ggplot(summary_data, aes(x = Treatment, y = avg_contributio
 # Display the plot
 print(contribution_plot)
 ggsave('../results/01_transplant_3_pw_genus.jpg', width = 8, height = 6)
+```
+### PCOA visualizing the compositional change 
+
+```{r}
+# Load the principal coordinates file from QIIME 2.
+pcoa_results_raw <- read_tsv("../data/weighted_unifrac_pc_transplant.txt", skip = 9, col_names = FALSE) %>% 
+  mutate(X1 = tolower(str_replace_all(X1, '\\.','_')))
+
+# The first column is the SampleID, the rest are the coordinates for each axis (PC1, PC2, etc.)
+colnames(pcoa_results_raw) <- c("SampleID", paste0("PC", 1:(ncol(pcoa_results_raw)-1)))
+
+# Extract the "Proportion Explained" ---
+
+# We also want to know how much variance each axis explains. This is in the header.
+proportion_explained_raw <- read_tsv("../data/weighted_unifrac_pc_transplant.txt", skip = 4, n_max = 1, col_names = FALSE)
+
+# Extract the values for the first two axes and convert to percentage
+pc1_varexp <- round(proportion_explained_raw$X1 * 100, 1)
+pc2_varexp <- round(proportion_explained_raw$X2 * 100, 1)
+
+#  Load Metadata and Merge ---
+
+# Merge the coordinates with the metadata by SampleID
+plot_data <- inner_join(pcoa_results_raw, meta, by = "SampleID") %>%
+  # Make sure the groups are ordered logically for the plot legend
+  mutate(
+    Treatment = factor(Treatment, levels = c("pbs", "propionate", "tcd")),
+    Timepoint = factor(Timepoint, levels = c("pre", "post"))
+  ) 
+```
+
+
+```{r}
+#  Create the PCoA Plot ---
+
+pcoa_plot <- ggplot(plot_data, aes(x = PC1, y = PC2, color = Treatment, shape = Timepoint)) +
+  # Add the points. We make them slightly transparent (alpha) and larger (size).
+  geom_point(size = 4, alpha = 0.8) +
+  
+  # Use a clear, color-blind friendly color scheme
+  scale_color_manual(values = c("pbs" = "#1f77b4", "propionate" = "#d62728", "tcd" = "black")) +
+  
+  # Use solid circles for 'pre' and solid triangles for 'post'
+  scale_shape_manual(values = c("pre" = 16, "post" = 17)) +
+  
+  # Add lines connecting the pre- and post- samples for each mouse to show trajectory
+  geom_line(aes(group = MouseID), alpha = 0.3) +
+
+  # Add informative axis labels, including the proportion of variance explained
+  labs(
+    title = "PCoA of Microbial Communities (Weighted UniFrac)",
+    subtitle = "Visualizing the trajectory of each treatment group",
+    x = paste0("PC1 (", pc1_varexp, "%)"),
+    y = paste0("PC2 (", pc2_varexp, "%)"),
+    color = "Treatment Group",
+    shape = "Timepoint"
+  ) +
+  
+  # Apply a clean theme and add a coordinate system
+  theme_minimal(base_size = 14) +
+  coord_fixed() # Ensures that the axes are scaled 1:1
+
+# Display the plot
+print(pcoa_plot)
+```
+```{r}
+# what about the other two distance matrix
+# Load the principal coordinates file from QIIME 2.
+pcoa_results_raw <- read_tsv("../data/bray_curtis_pc_transplant.txt", skip = 9, col_names = FALSE) %>% 
+  mutate(X1 = tolower(str_replace_all(X1, '\\.','_')))
+
+# The first column is the SampleID, the rest are the coordinates for each axis (PC1, PC2, etc.)
+colnames(pcoa_results_raw) <- c("SampleID", paste0("PC", 1:(ncol(pcoa_results_raw)-1)))
+
+# Extract the "Proportion Explained" ---
+
+# We also want to know how much variance each axis explains. This is in the header.
+proportion_explained_raw <- read_tsv("../data/bray_curtis_pc_transplant.txt", skip = 4, n_max = 1, col_names = FALSE)
+
+# Extract the values for the first two axes and convert to percentage
+pc1_varexp <- round(proportion_explained_raw$X1 * 100, 1)
+pc2_varexp <- round(proportion_explained_raw$X2 * 100, 1)
+
+#  Load Metadata and Merge ---
+
+# Merge the coordinates with the metadata by SampleID
+plot_data <- inner_join(pcoa_results_raw, meta, by = "SampleID") %>%
+  # Make sure the groups are ordered logically for the plot legend
+  mutate(
+    Treatment = factor(Treatment, levels = c("pbs", "propionate", "tcd")),
+    Timepoint = factor(Timepoint, levels = c("pre", "post"))
+  ) 
+
+
+pcoa_plot <- ggplot(plot_data, aes(x = PC1, y = PC2, color = Treatment, shape = Timepoint)) +
+  # Add the points. We make them slightly transparent (alpha) and larger (size).
+  geom_point(size = 4, alpha = 0.8) +
+  
+  # Use a clear, color-blind friendly color scheme
+  scale_color_manual(values = c("pbs" = "#1f77b4", "propionate" = "#d62728", "tcd" = "black")) +
+  
+  # Use solid circles for 'pre' and solid triangles for 'post'
+  scale_shape_manual(values = c("pre" = 16, "post" = 17)) +
+  
+  # Add lines connecting the pre- and post- samples for each mouse to show trajectory
+  geom_line(aes(group = MouseID), alpha = 0.3) +
+
+  # Add informative axis labels, including the proportion of variance explained
+  labs(
+    title = "PCoA of Microbial Communities (Bray Curtis)",
+    subtitle = "Visualizing the trajectory of each treatment group",
+    x = paste0("PC1 (", pc1_varexp, "%)"),
+    y = paste0("PC2 (", pc2_varexp, "%)"),
+    color = "Treatment Group",
+    shape = "Timepoint"
+  ) +
+  
+  # Apply a clean theme and add a coordinate system
+  theme_minimal(base_size = 14) +
+  coord_fixed() # Ensures that the axes are scaled 1:1
+
+# Display the plot
+print(pcoa_plot)
+```
+
+```{r}
+# permanova test
+
 ```
 
