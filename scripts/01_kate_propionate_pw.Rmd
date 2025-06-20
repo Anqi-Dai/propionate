@@ -1179,3 +1179,80 @@ signature_plot <- ggplot(head(res_df, 20), aes(x = log2FoldChange, y = reorder(P
 print(signature_plot)
 ```
 
+### correlate with the gvhd score
+
+```{r}
+# --- Step 1: Create a Data Frame for the Clinical Scores ---
+
+# Manually enter the GVHD scores from the spreadsheet for Day 7.
+# We create a tidy data frame with this information.
+gvhd_scores_day7 <- tibble(
+  Treatment = c(rep("tcd", 4), rep("pbs", 8), rep("propionate", 8)),
+  MouseNumber = c(1:4, 1:8, 1:8),
+  GVHD_Score = c(0, 0, 0, 0,  # TCD scores at Day 7
+                 5, 3.5, 4, 4, 3.5, 3.5, 4, 4, # PBS scores at Day 7
+                 2.5, 2.5, 2.5, 2, 2, 2.5, 2, 2) # Propionate scores at Day 7
+) %>%
+  # Create a unique MouseID that matches the format in your main metadata
+  mutate(MouseID = paste(tolower(Treatment), MouseNumber, sep = "_"))
+
+
+# --- Step 2: Prepare the Microbiome and Clinical Data for Merging ---
+
+# Choose the specific microbial feature we want to test.
+# Let's test the L-citrulline biosynthesis pathway (CITRULBIO-PWY)
+pathway_to_test <- "CITRULBIO-PWY"
+
+# Filter the main microbiome data for our pathway of interest and the 'post' timepoint.
+pathway_data_post <- data_full %>%
+  mutate(Timepoint = as.character(Timepoint)) %>% 
+  filter(Timepoint == "post", Pathway == pathway_to_test)
+
+# Now, join this microbiome data with the corresponding GVHD scores.
+# We use an inner_join on MouseID to link each mouse's pathway abundance to its GVHD score.
+correlation_data <- inner_join(pathway_data_post, gvhd_scores_day7, by = "MouseID")
+
+
+# --- Step 3: Perform Correlation Test ---
+
+# Use Spearman's rank correlation. It's robust and doesn't assume a linear relationship.
+# We expect a negative correlation: higher pathway abundance should link to lower GVHD score.
+correlation_test <- cor.test(~ log2_cpm + GVHD_Score, 
+                             data = correlation_data, 
+                             method = "spearman")
+
+# Print the results of the statistical test
+print(correlation_test)
+```
+
+
+```{r}
+# --- Step 4: Visualize the Correlation ---
+
+# A scatter plot is the best way to visualize this relationship.
+correlation_plot <- ggplot(correlation_data, aes(x = log2_cpm, y = GVHD_Score)) +
+  # Add the points, colored by treatment group
+  geom_point(aes(color = Treatment.x), size = 4, alpha = 0.8) +
+  
+  # Add separate regression lines for each treatment group to see individual trends.
+  geom_smooth(aes(color = Treatment.x), method = "lm", se = FALSE, linetype = "dashed") +
+  
+  # Use our standard color scheme
+  scale_color_manual(values = c("pbs" = "#1f77b4", "propionate" = "#d62728", "tcd" = "black")) +
+  
+  # Add informative labels and title
+  # The subtitle now focuses on the visualization rather than the confounded overall p-value.
+  labs(
+    title = paste("Correlation between", pathway_to_test, "and GVHD Score"),
+    subtitle = "Trends shown for each treatment group separately",
+    x = "Pathway Abundance (Log2 CPM)",
+    y = "GVHD Score at Day +7",
+    color = "Treatment Group"
+  ) +
+  
+  theme_minimal(base_size = 14)
+
+# Display the plot
+print(correlation_plot)
+```
+
