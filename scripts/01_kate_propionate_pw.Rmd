@@ -212,46 +212,46 @@ metadata <- tibble(SampleID = sample_names) %>%
   select(SampleID, Treatment, Timepoint, MouseID) %>% 
   mutate(Treatment = factor(Treatment, levels = c('pbs','propionate')),
          Timepoint = factor(Timepoint, levels = c('pre','post')) )
-
-#  Prepare Data for MaAsLin2 ---
-# MaAsLin2 needs samples in rows and features (pathways) in columns.
-
-input_data <- combined_pathway_data %>%
-  filter(exp == 'steady') %>% 
-  select(SampleID = sample_id, pathway, abundance) %>%
-  pivot_wider(names_from = "pathway", values_from = "abundance") %>%
-  column_to_rownames("SampleID")
 ```
 
 
 ```{r}
+#  Prepare Data for MaAsLin2 ---
+# MaAsLin2 needs samples in rows and features (pathways) in columns.
+
+# input_data <- combined_pathway_data %>%
+#   filter(exp == 'steady') %>% 
+#   select(SampleID = sample_id, pathway, abundance) %>%
+#   pivot_wider(names_from = "pathway", values_from = "abundance") %>%
+#   column_to_rownames("SampleID")
+
 # Set SampleID as row names for the metadata as well
-input_metadata <- metadata %>%
-  column_to_rownames("SampleID") %>% 
-  mutate(Treatment = factor(Treatment, levels = c('pbs','propionate')),
-         Timepoint = factor(Timepoint, levels = c('pre','post')) )
-
-# Sanity check: Ensure sample names match perfectly between data and metadata
-stopifnot(all(rownames(input_data) == rownames(input_metadata)))
-
-
-#  Run MaAsLin2 Analysis ---
-fit_data <- Maaslin2(
-    input_data = input_data,
-    input_metadata = input_metadata,
-    output = "../results/01_maaslin2_propionate_results",
-    fixed_effects = c("Treatment", "Timepoint"),
-    random_effects = c("MouseID"), # Controls for repeated measures from the same mouse
-    normalization = "TSS",
-    transform = "LOG",
-    min_prevalence = 0.1,
-    max_significance = 0.05,
-    cores = 10
-)
+# input_metadata <- metadata %>%
+#   column_to_rownames("SampleID") %>% 
+#   mutate(Treatment = factor(Treatment, levels = c('pbs','propionate')),
+#          Timepoint = factor(Timepoint, levels = c('pre','post')) )
+# 
+# # Sanity check: Ensure sample names match perfectly between data and metadata
+# stopifnot(all(rownames(input_data) == rownames(input_metadata)))
+# 
+# 
+# #  Run MaAsLin2 Analysis ---
+# fit_data <- Maaslin2(
+#     input_data = input_data,
+#     input_metadata = input_metadata,
+#     output = "../results/01_maaslin2_propionate_results",
+#     fixed_effects = c("Treatment", "Timepoint"),
+#     random_effects = c("MouseID"), # Controls for repeated measures from the same mouse
+#     normalization = "TSS",
+#     transform = "LOG",
+#     min_prevalence = 0.1,
+#     max_significance = 0.05,
+#     cores = 10
+# )
 #The MaAsLin 2 plots show the normalized abundances (e.g., relative abundance) that were fed into the model, not raw counts.
 ```
 
-### FDR < 0.05        
+
 
 ```{r}
 sig_res <- read_tsv('../results/01_maaslin2_propionate_results/significant_results.tsv')
@@ -334,9 +334,9 @@ ggplot(
 
 - Why the Mixed-Effects Model is Still the Best Choice
 
-- Fixed Effects: These are the variables you want to test: time (pre vs. post) and treatment_group (PBS vs. Propionate). The model will test if the change over time is different between your two groups (the time * treatment_group interaction).
+- Fixed Effects:  the variables I want to test: time (pre vs. post) and treatment_group (PBS vs. Propionate). The model will test if the change over time is different between the two groups (the time * treatment_group interaction).
 
-- Random Effect: This is what makes the model perfect for your data. By adding mouse_id as a random effect, you are telling the model that the two measurements from Mouse_1 are related to each other, and not independent like the measurements from Mouse_2. It correctly pairs the pre- and post-treatment samples for each mouse. 
+- Random Effect: This is what makes the model perfect for the data. By adding mouse_id as a random effect, you are telling the model that the two measurements from Mouse_1 are related to each other, and not independent like the measurements from Mouse_2. It correctly pairs the pre- and post-treatment samples for each mouse. 
 
 ```{r}
 library(lmerTest) 
@@ -616,6 +616,96 @@ contribution_plot <- ggplot(summary_data, aes(x = Treatment, y = avg_contributio
 print(contribution_plot)
 
 ggsave('../results/01_steady_3_pw_genus.jpg', width = 10, height = 9)
+```
+### "Propionate-Signature" Bacteria 
+
+```{r}
+library(DESeq2)  
+
+# --- Load and Format Data ---
+
+count_table <- read_csv("../data/steady_ASV_Abundance_Table.csv" ) %>%  column_to_rownames('seqs')
+# Convert the biom object to a standard numeric matrix
+count_matrix <- as.matrix(count_table) %>% t()
+
+colnames(count_matrix) <- tolower(str_replace_all(colnames(count_matrix), "\\.", "_"))
+
+# Load the taxonomy data
+tax_raw <- read_tsv("../data/ASV_tax_assignments_steady.txt", col_names = F)
+tax_clean <- tax_raw %>%
+  dplyr::rename(ASV = X1) %>%
+  # Separate the long taxon string into ranks for easier labeling later
+  separate(X2, into = c("k", "p", "c", "o", "f", "g", "s"), sep = ";") %>%
+  # Clean up the names (e.g., remove "g__")
+  mutate(g = str_remove(g, "g__"),
+         s = str_remove(s, "s__"),
+         f = str_remove(f, "f__")) %>%
+  select(ASV, Family = f, Genus = g, Species = s)
+
+# --- Prepare Data for DESeq2 ---
+
+# The goal is to find the signature bacteria AFTER treatment.
+# So, we will filter our data to only include the 'post' samples.
+meta_post <- metadata %>% 
+  mutate(Timepoint = as.character(Timepoint)) %>% 
+  filter(Timepoint == "post")
+
+# The columns in the count matrix must be in the same order as the rows in the metadata.
+# This reorders the count matrix columns to match the metadata.
+count_matrix_post <- count_matrix[, meta_post$SampleID]
+
+# --- Run DESeq2 Analysis ---
+
+# Create the DESeqDataSet object. This object bundles the counts,
+# metadata, and the experimental design for the analysis.
+# The design `~ Treatment` tells DESeq2 to find differences based on the Treatment column.
+dds <- DESeqDataSetFromMatrix(
+  countData = count_matrix_post,
+  colData = meta_post,
+  design = ~ Treatment
+)
+
+# Run the main DESeq2 function. This performs normalization, dispersion estimation,
+# and fits the model to find differentially abundant features.
+dds_result <- DESeq(dds)
+
+# Get the results for our comparison of interest: propionate vs. the PBS control.
+# A positive log2FoldChange means the ASV is more abundant in the propionate group.
+res <- results(dds_result, contrast = c("Treatment", "propionate", "pbs"))
+
+# Convert the results to a tidy data frame for plotting
+res_df <- as.data.frame(res) %>%
+  rownames_to_column(var = "ASV") %>%
+  # Add the taxonomy information to our results
+  left_join(tax_clean, by = "ASV") %>%
+  # Filter for statistically significant results (FDR < 0.05)
+  filter(padj < 0.05) %>%
+  # Sort by the fold change to see the biggest differences first
+  arrange(desc(log2FoldChange))
+
+# --- Visualize the Results ---
+
+# Create a clean label for the plot, using Genus and ASV ID.
+res_df <- res_df %>%
+  mutate(PlotLabel = str_glue('f_{Family}|g_{Genus}|s_{Species} ({ASV})'))
+
+# Create a "dot plot" of the top 20 signature ASVs
+signature_plot <- ggplot(head(res_df, 20), aes(x = log2FoldChange, y = reorder(PlotLabel, log2FoldChange))) +
+  geom_point(aes(color = log2FoldChange, size = -log10(padj)), alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_color_gradient2(low = "#1f77b4", mid = "grey", high = "#d62728", midpoint = 0) +
+  labs(
+    title = "Steady state: Top Propionate-Signature Bacteria (vs. PBS)",
+    subtitle = "Analysis of post-treatment samples",
+    x = "Log2 Fold Change (More abundant in Propionate ->)",
+    y = "ASV (annotated with Genus)",
+    color = "Log2 Fold Change",
+    size = "Significance (-log10 FDR)"
+  ) +
+  theme_minimal()
+
+# Display the plot
+print(signature_plot)
 ```
 
 ## transplant experiment
@@ -1109,10 +1199,7 @@ tax_clean <- tax_raw %>%
          s = str_remove(s, "s__"),
          f = str_remove(f, "f__")) %>%
   select(ASV, Family = f, Genus = g, Species = s)
-```
 
-
-```{r}
 # --- Prepare Data for DESeq2 ---
 
 # The goal is to find the signature bacteria AFTER treatment.
