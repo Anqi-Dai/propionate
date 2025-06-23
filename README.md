@@ -19,3 +19,15 @@ This project uses **renv** to manage its R package dependencies, ensuring a cons
     renv::restore()
     ```
     This command will read the `renv.lock` file and install all the necessary R packages required for the project.
+    
+    
+    
+### Important Note: Stratified Output
+
+The "stratified output" section of the script relies on specific data files that are too large to host directly in this repository.
+
+To successfully run this part of the script, you **must** download the following file:
+
+* **[PICRUSt2 Output Data](https://drive.google.com/file/d/1IfQi9TMPXJ9QyKjmX4EOgzn8JLyFKWNz/view?usp=drive_link)**
+
+After downloading, extract its contents and use them to **replace** the `picrust2_out_steady` and `picrust2_out_transplant` folders located within the `data/` directory of this repository.
