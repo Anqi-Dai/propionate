@@ -4,6 +4,9 @@
 .Ruserdata
 .DS_Store
 
-# renv
-renv/
-!renv/activate.R
+# Ignore renv files that should not be in Git
+renv/library/
+renv/host-info.json
+renv/state.json
+renv/settings.json # (Optional: if you don't want to track renv settings)
+
