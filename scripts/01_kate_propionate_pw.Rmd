@@ -215,120 +215,6 @@ metadata <- tibble(SampleID = sample_names) %>%
 ```
 
 
-```{r}
-#  Prepare Data for MaAsLin2 ---
-# MaAsLin2 needs samples in rows and features (pathways) in columns.
-
-# input_data <- combined_pathway_data %>%
-#   filter(exp == 'steady') %>% 
-#   select(SampleID = sample_id, pathway, abundance) %>%
-#   pivot_wider(names_from = "pathway", values_from = "abundance") %>%
-#   column_to_rownames("SampleID")
-
-# Set SampleID as row names for the metadata as well
-# input_metadata <- metadata %>%
-#   column_to_rownames("SampleID") %>% 
-#   mutate(Treatment = factor(Treatment, levels = c('pbs','propionate')),
-#          Timepoint = factor(Timepoint, levels = c('pre','post')) )
-# 
-# # Sanity check: Ensure sample names match perfectly between data and metadata
-# stopifnot(all(rownames(input_data) == rownames(input_metadata)))
-# 
-# 
-# #  Run MaAsLin2 Analysis ---
-# fit_data <- Maaslin2(
-#     input_data = input_data,
-#     input_metadata = input_metadata,
-#     output = "../results/01_maaslin2_propionate_results",
-#     fixed_effects = c("Treatment", "Timepoint"),
-#     random_effects = c("MouseID"), # Controls for repeated measures from the same mouse
-#     normalization = "TSS",
-#     transform = "LOG",
-#     min_prevalence = 0.1,
-#     max_significance = 0.05,
-#     cores = 10
-# )
-#The MaAsLin 2 plots show the normalized abundances (e.g., relative abundance) that were fed into the model, not raw counts.
-```
-
-
-
-```{r}
-sig_res <- read_tsv('../results/01_maaslin2_propionate_results/significant_results.tsv')
-
-propionate_effects <- sig_res %>%
-  filter(metadata == "Treatment" & value == "propionate") %>%
-  arrange(coef)
-
-ggplot(propionate_effects, aes(x = coef, y = reorder(feature, coef))) +
-  geom_col(aes(fill = coef > 0), show.legend = FALSE) + # Color bars by positive/negative
-  geom_vline(xintercept = 0, linetype = "dashed") + # Add a line at zero
-  labs(
-    title = "Pathways Affected by Propionate Treatment",
-    subtitle = "Compared to PBS Control",
-    x = "Coefficient (Effect Size)",
-    y = "Metabolic Pathway"
-  ) +
-  theme_minimal() +
-  theme(
-    axis.text.y = element_text(size = 8) # Adjust text size if names are long
-  )+
-  scale_fill_manual(values = c("FALSE" = "blue", "TRUE" = "red"))
-```
-
-```{r}
-# visualize the normalized data in those pathways
-df_norm <- read_tsv('../results/01_maaslin2_propionate_results/features/filtered_data_norm.tsv') %>% 
-   pivot_longer(
-    cols = -feature,               # Select all columns except the 'feature' (sample name) column
-    names_to = "Pathway",          # Name of the new column for the pathway IDs
-    values_to = "norm_Abundance"        # Name of the new column for the abundance values
-  ) %>%
-  # Separate the 'feature' column into three new metadata columns
-  separate(
-    feature,
-    into = c("Treatment", "Timepoint", "MouseWord", "MouseNum"),
-    sep = "_",        # <-- The separator is now an underscore
-    remove = FALSE    # Keep the original SampleID column
-  ) %>%
-  # Combine 'MouseWord' and 'MouseNum' to create a unique ID for each mouse
-  mutate(MouseID = paste(MouseWord, MouseNum, sep = "_")) %>%
-  # Select the final, clean columns we need for the analysis
-  select(SampleID = feature, Treatment, Timepoint, MouseID,Pathway,  norm_Abundance) %>% 
-  mutate(
-    Treatment = factor(Treatment, levels = c("pbs", "propionate")),
-    Timepoint = factor(Timepoint, levels = c("pre", "post"))
-    ) %>% 
-  mutate(cpm = norm_Abundance * 1e6)
-  
-```
-
-
-```{r}
-ggplot(
-    # Filter the data to only include the pathway we want to plot
-    data = df_norm %>% filter(Pathway == 'PWY.7374'),
-
-    # Define the aesthetics: what data maps to what visual property
-    aes(x = Treatment, y = cpm, fill = Treatment)
-  ) +
-  geom_boxplot(alpha = 0.7, width = 0.6, outlier.shape = NA) + # Draw the boxes
-  geom_jitter(width = 0.15, height = 0, size = 2) +           # Overlay the individual data points
-  facet_wrap(~ Timepoint) +                                   # Create separate plots for 'pre' and 'post'
-  labs(
-    title = paste("Abundance of", 'PWY.7374'),
-    subtitle = "Comparison before and after treatment",
-    x = "Treatment Group",
-    y = "Normalized Abundance"
-  ) +
-  theme_bw() + # Use a clean black-and-white theme
-  theme(
-    plot.title = element_text(hjust = 0.5, face = "bold"),
-    plot.subtitle = element_text(hjust = 0.5),
-    strip.text = element_text(face = "bold", size = 12), # Style the 'pre'/'post' facet labels
-    legend.position = "none" # The fill color is redundant with the x-axis
-    )
-```
     
 ### the LME looking at the unstratified data
 
@@ -920,7 +806,7 @@ faceted_interaction_plot <- ggplot(plot_data,
 faceted_interaction_plot
 ```
 
-### the genus contribution
+### the stratified output
 
 ```{r}
 # We need to do some cleaning to separate the taxonomy string into levels
