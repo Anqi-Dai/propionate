@@ -6,67 +6,131 @@ date: "2025-06-02"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-```
 
-- renv::init(): Start renv in your project to create a private package library.
-- install.packages("package_name"): Install packages as you normally would.
-- renv::snapshot(): Save the state of your project's packages to renv.lock.
-- renv::restore(): Re-create the project's environment from the renv.lock file on a new machine.
+# --- Working directory guard ---------------------------------------------------
+# Every path below is relative to this file's own folder (scripts/), which is where
+# knitr runs an Rmd from by default. If someone sources the chunks from the project
+# root instead, every read silently fails partway through a long run. Check up front
+# and fail with a message that says what to do.
+if (!dir.exists("../data") || !file.exists("../renv.lock")) {
+  stop("This notebook must be run from the 'scripts/' folder of the propionate repo.\n",
+       "  Current working directory: ", normalizePath("."), "\n",
+       "  In RStudio, open propionate.Rproj and knit this file; from the console, ",
+       "setwd() to scripts/ first.")
+}
 
+# --- Output folders ------------------------------------------------------------
+# results/ holds every figure this notebook writes. It is not tracked in git (the
+# figures are regenerated from this script), so create it on a fresh clone.
+dir.create("../results", showWarnings = FALSE)
+# data/derived/ holds files this notebook *generates* as input for PICRUSt2. Keeping
+# them out of data/ makes it obvious which files are raw inputs and which are built.
+dir.create("../data/derived", showWarnings = FALSE)
 
-# installing picrust2  on linux 
-
-finally worked with creating new conda env, and then "mamba install bioconda::picrust2" with the older version picrust2_pipeline.py 2.0.3-b
-
-
-```{r}
+# --- Packages ------------------------------------------------------------------
+# Loaded up front so a missing dependency fails in the first second rather than
+# twenty minutes into the run. Exact versions are pinned in renv.lock.
 library(tidyverse)
-library(Maaslin2)
+library(readxl)      # reads the GVHD clinical scoring spreadsheet
 library(ggrepel)
+library(Biostrings)  # FASTA handling for the PICRUSt2 input prep
+library(lmerTest)    # mixed-effects models that report p-values
+library(DESeq2)      # differential abundance of ASVs
+library(vegan)       # PERMANOVA (adonis2)
+
+# --- Reproducibility -----------------------------------------------------------
+# adonis2() below is a permutation test: without a fixed seed its p-value changes on
+# every run, so the numbers in the manuscript would not be reproducible. Seed once
+# here for a top-to-bottom knit, and again immediately before the test itself so
+# that re-running that chunk alone gives the same answer.
+set.seed(20250602)
 ```
 
-# reformatting the asv results from zymo pipeline
+**Run order matters.** This notebook is written to be knitted, or run top to bottom in
+a fresh session. Several object names (`data_full`, `plot_data`, `meta`, `tax_raw`,
+`top_pathways`) are deliberately reused between the steady-state section and the
+transplant section, so running chunks out of order can silently analyze the wrong
+dataset. The chunks that feed manuscript figures assert which dataset they are
+holding before they compute anything.
 
-The OTU table should be having this format:
-#OTUID	SampleA	SampleB	SampleC
-ASV_1	150	    0	    210
-ASV_2	0	    55	    84
-ASV_3	78	    12	    0
+renv reminders, for whoever picks this up next:
 
-```{r}
-asv_cts <- list.files('../data/', pattern = 'ASV_Abundance_Table.csv', full.names = T) 
+- `renv::restore()` recreates the exact package library recorded in `renv.lock`. Run
+  this first on a new machine — see the README for the required R version.
+- `renv::snapshot()` writes any newly installed packages back into `renv.lock`. Run
+  it whenever you add a `library()` call, or the next person's restore will not have
+  what the script needs.
+- `renv::status()` reports drift between the lockfile and what is actually installed.
 
-# make them the requested format in tsv
 
-asv_cts %>% 
+# Preparing the PICRUSt2 inputs
+
+These two chunks convert the Zymo ASV output into the formats PICRUSt2 expects. They
+are set to `eval=FALSE` on purpose: PICRUSt2 itself was run separately on Linux, and
+its outputs are already shipped in `data/picrust2_out_*`, so nothing downstream in
+this notebook depends on re-running them. They are kept for provenance — to show
+exactly how the PICRUSt2 inputs were built — and both now write into `data/derived/`
+rather than overwriting files in `data/`.
+
+PICRUSt2 was installed in a fresh conda environment with
+`mamba install bioconda::picrust2`, using the older `picrust2_pipeline.py` 2.0.3-b.
+
+## ASV count table: wide CSV to the tab-delimited layout PICRUSt2 wants
+
+The target format is one row per ASV and one column per sample:
+
+    #OTUID  SampleA  SampleB  SampleC
+    ASV_1   150      0        210
+    ASV_2   0        55       84
+    ASV_3   78       12       0
+
+```{r eval=FALSE}
+# Find the raw per-experiment abundance tables shipped with the repo
+asv_cts <- list.files('../data/', pattern = 'ASV_Abundance_Table.csv', full.names = T)
+
+# Transpose each one into the PICRUSt2 layout and write it to data/derived/.
+# Writing to a separate folder keeps the raw inputs in data/ untouched, so this
+# chunk can be re-run any number of times without changing its own input.
+asv_cts %>%
   map(function(fn){
-    read_csv(fn) %>% 
-      gather('seq_id','count', names(.)[2]:names(.)[ncol(.)]) %>% 
-      spread('seqs','count', fill = 0) %>% 
-      janitor::clean_names() %>% 
-      rename(`#ASVID` = seq_id)  %>% 
-      write_tsv(file = str_replace(fn, 'csv','tsv'))
+    out_fn <- file.path('../data/derived', str_replace(basename(fn), '\\.csv$', '.tsv'))
+    read_csv(fn) %>%
+      # Long-then-wide pivot swaps the sample and ASV axes
+      gather('seq_id','count', names(.)[2]:names(.)[ncol(.)]) %>%
+      spread('seqs','count', fill = 0) %>%
+      janitor::clean_names() %>%
+      rename(`#ASVID` = seq_id)  %>%
+      write_tsv(file = out_fn)
+    out_fn
   })
 ```
 
-```{r}
-library(Biostrings)
-# double check if the asv seq id match between the two 
-test <- read_csv(asv_cts[1]) %>% 
-      gather('seq_id','count', names(.)[2]:names(.)[ncol(.)]) 
+## ASV sequences: strip the size annotation from the FASTA headers
+
+PICRUSt2 matches sequence names against the count table, so the trailing
+` size=NNN` that the Zymo pipeline appends has to go.
+
+```{r eval=FALSE}
+# Sanity check that the ASV ids in the count table and the FASTA agree
+test <- read_csv(asv_cts[1]) %>%
+      gather('seq_id','count', names(.)[2]:names(.)[ncol(.)])
 
 fasta_file <- '../data/transplant_sv.seqs.fna'
 dna_sequences <- readDNAStringSet(fasta_file)
-names(dna_sequences) 
 
-cleaned_names <- sub(" size=.*", "", names(dna_sequences) )
+# Drop the " size=..." suffix that Zymo adds to each header
+cleaned_names <- sub(" size=.*", "", names(dna_sequences))
+names(dna_sequences) <- cleaned_names
 
-#length(intersect(cleaned_names, test$seq_id))
+# Confirm the cleaned names actually match the count table before writing anything
+stopifnot(length(intersect(cleaned_names, test$seq_id)) > 0)
 
-names(dna_sequences)  <- cleaned_names
-
-
-writeXStringSet(dna_sequences, filepath = fasta_file, format = "fasta")
+# Write the cleaned FASTA to data/derived/ rather than back over the input file.
+# The original version of this chunk wrote to `fasta_file` itself, which meant every
+# run mutated a tracked input and the second run operated on different data.
+writeXStringSet(dna_sequences,
+                filepath = '../data/derived/transplant_sv.seqs.cleaned.fna',
+                format = "fasta")
 ```
 
 # pathway output 
@@ -225,7 +289,6 @@ metadata <- tibble(SampleID = sample_names) %>%
 - Random Effect: This is what makes the model perfect for the data. By adding mouse_id as a random effect, you are telling the model that the two measurements from Mouse_1 are related to each other, and not independent like the measurements from Mouse_2. It correctly pairs the pre- and post-treatment samples for each mouse. 
 
 ```{r}
-library(lmerTest) 
 # Load pathway abundance data (from path_abun_unstrat.tsv)
 path_abun <- read.table("../data/picrust2_out_steady/pathways_out/path_abun_unstrat.tsv.gz", 
                         header = TRUE, 
@@ -346,6 +409,8 @@ volcano_plot <- ggplot(plot_data, aes(x = Estimate, y = -log10(FDR))) +
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
+volcano_plot
+ggsave('../results/F1I.pdf', width = 8)
 ```
 
 
@@ -501,13 +566,11 @@ contribution_plot <- ggplot(summary_data, aes(x = Treatment, y = avg_contributio
 # Display the plot
 print(contribution_plot)
 
-ggsave('../results/01_steady_3_pw_genus.jpg', width = 10, height = 9)
+ggsave('../results/01_steady_3_pw_genus_F1J.pdf', width = 10, height = 9)
 ```
 ### "Propionate-Signature" Bacteria 
 
 ```{r}
-library(DESeq2)  
-
 # --- Load and Format Data ---
 
 count_table <- read_csv("../data/steady_ASV_Abundance_Table.csv" ) %>%  column_to_rownames('seqs')
@@ -592,6 +655,8 @@ signature_plot <- ggplot(head(res_df, 20), aes(x = log2FoldChange, y = reorder(P
 
 # Display the plot
 print(signature_plot)
+
+ggsave('../results/F1G.pdf', width = 8)
 ```
 
 ## transplant experiment
@@ -619,8 +684,6 @@ metadata_df <- tibble(SampleID = sample_names) %>%
 ```
 
 ```{r}
-library(lmerTest) # For p-values in our mixed-effects models
-
 #  Load and Prepare Data ---
 
 # Load the metadata 
@@ -748,8 +811,11 @@ volcano_plot <- ggplot(plot_data, aes(x = Estimate, y = -log10(FDR))) +
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
+ggsave('../results/F4F.pdf', width = 8, height = 7)
+```
 
 
+```{r}
 ### the abundance interaction plot
 top_pathways <- plot_data %>%
   filter(significance != 'Not Significant') %>% 
@@ -893,7 +959,7 @@ contribution_plot <- ggplot(summary_data, aes(x = Treatment, y = avg_contributio
 
 # Display the plot
 print(contribution_plot)
-ggsave('../results/01_transplant_3_pw_genus.jpg', width = 8, height = 6)
+ggsave('../results/01_transplant_3_pw_genus_F4G.pdf', width = 8, height = 7)
 ```
 ### PCOA visualizing the compositional change 
 
@@ -1049,10 +1115,15 @@ meta_for_permanova <- meta %>%
 
 
 ```{r}
-library(vegan)
-# Run the PERMANOVA test 
+# Run the PERMANOVA test
 # We use the formula `dist_matrix ~ Timepoint * Treatment` to test the interaction.
 # This asks: "Is the trajectory of community change different between the treatment groups?"
+
+# adonis2() gets its p-values by randomly permuting the group labels, so the result
+# differs slightly on every run unless the generator is seeded. Seed here as well as
+# in the setup chunk, so that re-running this one chunk reproduces the published
+# p-values exactly rather than only a full top-to-bottom knit.
+set.seed(20250602)
 permanova_result <- adonis2(dist_obj ~ Timepoint * Treatment, data = meta_for_permanova, by = "terms")
 
 # Display the results
@@ -1062,8 +1133,6 @@ print(permanova_result)
 ### Identify the "Propionate-Signature" Bacteria 
 
 ```{r}
-library(DESeq2)
-
 # --- Load and Format Data ---
 
 # Load the ASV count data from the exported .biom file
@@ -1150,27 +1219,80 @@ signature_plot <- ggplot(head(res_df, 20), aes(x = log2FoldChange, y = reorder(P
 
 # Display the plot
 print(signature_plot)
+ggsave('../results/F4E.pdf', width = 8, height = 7)
 ```
 
 ### correlate with the gvhd score
 
 ```{r}
-# --- Step 1: Create a Data Frame for the Clinical Scores ---
+# --- Step 1: Read the clinical GVHD scores from their source spreadsheet ---
 
-# Manually enter the GVHD scores from the spreadsheet for Day 7.
-# We create a tidy data frame with this information.
+# These scores used to be typed into the script by hand. They are now read straight
+# from data/Exp85 Propionate GVHD scores.xlsx so the numbers cannot drift from the
+# source, and so it is obvious where they came from.
+#
+# The sheet is laid out as a scoring grid rather than a tidy table: row 1 holds the
+# group name above the first mouse of each group, row 2 holds the mouse numbers, and
+# each row from 3 down is one scoring day. Blank spacer columns separate the groups.
+gvhd_raw <- read_excel("../data/Exp85 Propionate GVHD scores.xlsx",
+                       sheet = 1, col_names = FALSE, .name_repair = "minimal")
+
+# Row 2 carries the mouse numbers. Column 1 is the day label, and any column with no
+# mouse number is a spacer, so those are the columns to drop.
+mouse_numbers <- as.character(unlist(gvhd_raw[2, ]))
+score_cols    <- which(!is.na(mouse_numbers))
+score_cols    <- score_cols[score_cols != 1]
+
+# Row 1 names a group only above its first mouse, so carry each name rightward to
+# cover that group's remaining columns.
+group_labels <- as.character(unlist(gvhd_raw[1, ])) %>%
+  # tidyr::fill() works on columns, so pivot through a one-column tibble
+  {tibble(g = .)} %>%
+  fill(g, .direction = "down") %>%
+  pull(g)
+
+# Normalize the sheet's headings ("TCD group ", "PO PBS ", "PO Propionate") to the
+# lowercase treatment codes used everywhere else in this notebook.
+treatment_of <- function(x) {
+  x <- str_squish(str_to_lower(x))
+  case_when(str_detect(x, "propionate") ~ "propionate",
+            str_detect(x, "pbs")        ~ "pbs",
+            str_detect(x, "tcd")        ~ "tcd",
+            TRUE                        ~ NA_character_)
+}
+
+# Assemble one row per mouse per scoring day, then keep day 7 — the timepoint the
+# stool samples were collected at, and the one reported in the figure.
 gvhd_scores_day7 <- tibble(
-  Treatment = c(rep("tcd", 4), rep("pbs", 8), rep("propionate", 8)),
-  MouseNumber = c(1:4, 1:8, 1:8),
-  GVHD_Score = c(0, 0, 0, 0,  # TCD scores at Day 7
-                 5, 3.5, 4, 4, 3.5, 3.5, 4, 4, # PBS scores at Day 7
-                 2.5, 2.5, 2.5, 2, 2, 2.5, 2, 2) # Propionate scores at Day 7
+  col         = score_cols,
+  Treatment   = treatment_of(group_labels[score_cols]),
+  MouseNumber = as.integer(mouse_numbers[score_cols])
 ) %>%
-  # Create a unique MouseID that matches the format in your main metadata
-  mutate(MouseID = paste(tolower(Treatment), MouseNumber, sep = "_"))
+  mutate(GVHD_Score = map_dbl(col, ~ as.numeric(gvhd_raw[[.x]][3]))) %>%
+  # Row 3 of the sheet is day 7; confirm that before trusting it
+  {stopifnot(as.numeric(gvhd_raw[[1]][3]) == 7); .} %>%
+  select(Treatment, MouseNumber, GVHD_Score) %>%
+  # MouseID must match the format built from the sample names in the metadata
+  mutate(MouseID = paste(Treatment, MouseNumber, sep = "_"))
+
+# Guard against a silent change in the spreadsheet layout: these are the day 7
+# scores as published, so any mismatch means the parsing above needs revisiting.
+stopifnot(
+  nrow(gvhd_scores_day7) == 20,
+  identical(gvhd_scores_day7$GVHD_Score,
+            c(0, 0, 0, 0,                            # TCD
+              5, 3.5, 4, 4, 3.5, 3.5, 4, 4,          # PBS
+              2.5, 2.5, 2.5, 2, 2, 2.5, 2, 2))       # propionate
+)
 
 
 # --- Step 2: Prepare the Microbiome and Clinical Data for Merging ---
+
+# `data_full` is reused between the steady-state and transplant sections of this
+# notebook. Assert we are holding the transplant version, so that running this chunk
+# out of order fails loudly instead of quietly analyzing the wrong experiment.
+stopifnot(all(c("pre", "post") %in% as.character(data_full$Timepoint)),
+          all(c("pbs", "propionate", "tcd") %in% data_full$Treatment))
 
 # Choose the specific microbial feature we want to test.
 # Let's test the L-citrulline biosynthesis pathway (CITRULBIO-PWY)
@@ -1178,46 +1300,88 @@ pathway_to_test <- "CITRULBIO-PWY"
 
 # Filter the main microbiome data for our pathway of interest and the 'post' timepoint.
 pathway_data_post <- data_full %>%
-  mutate(Timepoint = as.character(Timepoint)) %>% 
+  mutate(Timepoint = as.character(Timepoint)) %>%
   filter(Timepoint == "post", Pathway == pathway_to_test)
 
 # Now, join this microbiome data with the corresponding GVHD scores.
 # We use an inner_join on MouseID to link each mouse's pathway abundance to its GVHD score.
 correlation_data <- inner_join(pathway_data_post, gvhd_scores_day7, by = "MouseID")
 
+# Every mouse must match; a silent drop here would change the statistics below.
+stopifnot(nrow(correlation_data) == nrow(gvhd_scores_day7))
 
-# --- Step 3: Perform Correlation Test ---
 
-# Use Spearman's rank correlation. It's robust and doesn't assume a linear relationship.
-# We expect a negative correlation: higher pathway abundance should link to lower GVHD score.
-correlation_test <- cor.test(~ log2_cpm + GVHD_Score, 
-                             data = correlation_data, 
-                             method = "spearman")
+# --- Step 3: Quantify the group separation ---
 
-# Print the results of the statistical test
+# NOTE ON METHOD (2026-08): this section previously reported a Spearman rank
+# correlation between pathway abundance and GVHD score, which dated from an earlier
+# version of the figure that drew a regression line within each group. That test does
+# not support the claim being made and is not significant in any formulation:
+#
+#   all three groups pooled : rho = +0.06, p = 0.79
+#   PBS + propionate only   : rho = -0.49, p = 0.053
+#   within PBS only         : rho = -0.21, p = 0.62
+#   within propionate only  : rho = +0.44, p = 0.28
+#
+# Pooling turns the correlation positive because TCD mice have both low pathway
+# abundance and a GVHD score of 0, which cancels the trend in the other two groups.
+#
+# The claim the figure actually makes is that propionate-treated mice sit in a
+# distinct region of high pathway abundance and low disease score, so the reported
+# statistics are now group differences on each axis. Those are unambiguous.
+group_tests <- correlation_data %>%
+  filter(Treatment.x != "tcd") %>%
+  # Wilcoxon rank-sum: non-parametric, appropriate for n = 8 per group and for the
+  # ordinal, heavily tied GVHD score
+  summarise(
+    p_pathway = wilcox.test(log2_cpm   ~ Treatment.x, exact = FALSE)$p.value,
+    p_gvhd    = wilcox.test(GVHD_Score ~ Treatment.x, exact = FALSE)$p.value
+  )
+
+print(group_tests)
+
+# Group means, which are what the figure legend quotes
+correlation_data %>%
+  group_by(Treatment.x) %>%
+  summarise(n = n(),
+            mean_log2_cpm = mean(log2_cpm), sd_log2_cpm = sd(log2_cpm),
+            mean_gvhd     = mean(GVHD_Score), sd_gvhd    = sd(GVHD_Score)) %>%
+  print()
+
+# The superseded correlation, kept so the numbers above can be checked against the
+# earlier version of the analysis. It is not reported in the manuscript.
+correlation_test <- cor.test(~ log2_cpm + GVHD_Score,
+                             data = correlation_data,
+                             method = "spearman", exact = FALSE)
 print(correlation_test)
 ```
 
 
 ```{r}
-# --- Step 4: Visualize the Correlation ---
+# --- Step 4: Visualize the Group Separation  ---
 
-# A scatter plot is the best way to visualize this relationship.
-correlation_plot <- ggplot(correlation_data, aes(x = log2_cpm, y = GVHD_Score)) +
-  # Add the points, colored by treatment group
+# This plot emphasizes the distinct clustering of the treatment groups.
+separation_plot <- ggplot(correlation_data, aes(x = log2_cpm, y = GVHD_Score)) +
+  # --- EDIT ---
+  # Add ellipses for only the PBS and Propionate groups to avoid the error.
+  # We do this by passing a filtered dataset directly to this layer.
+  stat_ellipse(data = . %>% filter(Treatment.x != "tcd"), 
+               aes(color = Treatment.x), 
+               type = "t", 
+               level = 0.95, 
+               linewidth = 1.5, 
+               alpha = 0.7) +
+  
+  # Add the individual data points.
   geom_point(aes(color = Treatment.x), size = 4, alpha = 0.8) +
   
-  # Add separate regression lines for each treatment group to see individual trends.
-  geom_smooth(aes(color = Treatment.x), method = "lm", se = FALSE, linetype = "dashed") +
-  
-  # Use our standard color scheme
+  # Use our standard color scheme.
   scale_color_manual(values = c("pbs" = "#1f77b4", "propionate" = "#d62728", "tcd" = "black")) +
   
-  # Add informative labels and title
-  # The subtitle now focuses on the visualization rather than the confounded overall p-value.
+  # Add informative labels that focus on the separation.
   labs(
-    title = paste("Correlation between", pathway_to_test, "and GVHD Score"),
-    subtitle = "Trends shown for each treatment group separately",
+    title = paste("Separation of Treatment Groups by", pathway_to_test, "and GVHD Score"),
+    subtitle = "Propionate treatment shifts mice to a 'high pathway, low disease' state",
     x = "Pathway Abundance (Log2 CPM)",
     y = "GVHD Score at Day +7",
     color = "Treatment Group"
@@ -1226,6 +1390,16 @@ correlation_plot <- ggplot(correlation_data, aes(x = log2_cpm, y = GVHD_Score)) 
   theme_minimal(base_size = 14)
 
 # Display the plot
-print(correlation_plot)
+print(separation_plot)
+
+# Write to results/ alongside the other figure panels. The original version wrote
+# this PDF into data/, which mixed a generated figure in with the raw inputs.
+ggsave('../results/F4H.pdf', plot = separation_plot, width = 8)
+```
+
+```{r}
+# Record the exact package versions this run used, so a future reader can tell
+# whether a difference in output comes from the code or from the environment.
+sessionInfo()
 ```
 
