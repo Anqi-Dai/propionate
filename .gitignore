@@ -41,7 +41,14 @@ data/derived/
 # --- Large PICRUSt2 files that are downloaded, not versioned ---
 # The stratified contribution tables are ~40 MB each and the full PICRUSt2 output
 # archive is ~680 MB. See the README for the download link.
-data/picrust2_out_*/pathways_out/path_abun_contrib.tsv.gz
+# Ignore everything PICRUSt2 produced except the two small unstratified pathway
+# tables the repository tracks. This also covers the case where someone unzips the
+# whole archive into data/ (2.1 GB, including a 132 MB file GitHub would reject).
+data/picrust2_out_*/*
+!data/picrust2_out_*/pathways_out/
+data/picrust2_out_*/pathways_out/*
+!data/picrust2_out_*/pathways_out/path_abun_unstrat.tsv.gz
+__MACOSX/
 *.zip
 
 # --- Figures accidentally written into data/ by older versions of the script ---

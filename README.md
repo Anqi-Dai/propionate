@@ -56,16 +56,23 @@ executes every chunk without needing pandoc.
    run with. It takes a while the first time. `renv::status()` will tell you whether
    anything is still out of sync.
 
-3. **Download the large PICRUSt2 files.** Two stratified contribution tables are too
+3. **Get the two large PICRUSt2 files.** Two stratified contribution tables are too
    large to version here (~40 MB each), so they are not in the repository:
 
    - `data/picrust2_out_steady/pathways_out/path_abun_contrib.tsv.gz`
    - `data/picrust2_out_transplant/pathways_out/path_abun_contrib.tsv.gz`
 
-   Download them from
-   [PICRUSt2 output data](https://drive.google.com/file/d/1IfQi9TMPXJ9QyKjmX4EOgzn8JLyFKWNz/view?usp=drive_link),
-   extract, and place the two `pathways_out` folders inside `data/picrust2_out_steady/`
-   and `data/picrust2_out_transplant/`. The rest of the notebook runs without them;
+   Both are inside `two_folders_of_picrust_output.zip`, available from
+   [Google Drive](https://drive.google.com/file/d/1IfQi9TMPXJ9QyKjmX4EOgzn8JLyFKWNz/view?usp=drive_link)
+   or from the lab drive archive (see [The PICRUSt2 archive](#the-picrust2-archive)).
+   From the project root, extract just those two files into place:
+
+   ```bash
+   unzip two_folders_of_picrust_output.zip 'picrust2_out_*/pathways_out/path_abun_contrib.tsv.gz' -d data/
+   ```
+
+   Don't unzip the whole archive into `data/`. It expands to 2.1 GB, and most of it is
+   not used by the analysis. The rest of the notebook runs without these two files;
    only the two "stratified output" sections (which produce the genus-contribution
    panels, Figures 1J and 4G) need them.
 
@@ -85,6 +92,39 @@ executes every chunk without needing pandoc.
 Both `results/` and `data/derived/` are ignored by git because everything in them is
 reproduced by running the notebook. The folders are created automatically by the
 setup chunk, so a fresh clone works without any manual `mkdir`.
+
+## The experiments
+
+| Experiment | Experiment ID | Design | Mice |
+|---|---|---|---|
+| Steady state | 10.07.2024 Exp123 propionate pre-treatment pre-tx | PBS or propionate by gavage for 5 days; stool before and after | 5 per group |
+| Transplant | 01.28.2025 Exp085 Propionate vs PBS day -5 and +7 | Stool at day −5 (before gavage started) and day +7 after HCT | PBS 8, propionate 8, TCD 4 |
+
+## The PICRUSt2 archive
+
+`two_folders_of_picrust_output.zip` (683 MB, 2.1 GB unzipped) holds the complete
+PICRUSt2 output for both experiments, one folder each: `picrust2_out_steady/` and
+`picrust2_out_transplant/`. The analysis uses only a small part of it:
+
+| Inside each `picrust2_out_*/` folder | Size (steady / transplant) | Used by the analysis? |
+|---|---|---|
+| `pathways_out/path_abun_contrib.tsv.gz` | 45 / 39 MB | **Yes** — extract these two (setup step 3) |
+| `pathways_out/path_abun_unstrat.tsv.gz` | 0.1 / 0.1 MB | Yes, but already in this repository |
+| `EC_metagenome_out/` | 66 / 53 MB | No — enzyme (EC number) predictions |
+| `KO_metagenome_out/` | 132 / 106 MB | No — KEGG ortholog (KO) predictions |
+| `intermediate/` | 828 / 827 MB | No — PICRUSt2's working files |
+| `*.tre`, `*_predicted.tsv.gz`, `*_nsti.tsv.gz` | 4 / 4 MB | No — per-ASV predictions and placement trees |
+
+The zip also contains a `__MACOSX/` folder, which is macOS packaging metadata and can be
+ignored. Everything beyond the two contribution tables is kept for the record, so that
+none of the PICRUSt2 run has to be redone to check a result.
+
+**A permanent copy is on the Peled lab drive**, in
+`peledlab/Angel_Anqi_Dai/Propionate_related/` (on a Mac with the share mounted:
+`/Volumes/peledlab/Angel_Anqi_Dai/Propionate_related/`). If the zip ever needs to be
+recovered, take it from there. The same folder also holds the project brief with the
+experiment details above (`Propionate paper short summary.pdf`) and a PDF snapshot of
+the analysis slides (`propionate_analysis_slides_snapshot_2026-11-23.pdf`).
 
 ## Notes on reproducibility
 
