@@ -40,7 +40,7 @@ data/derived/
 
 # --- Large PICRUSt2 files that are downloaded, not versioned ---
 # The stratified contribution tables are ~40 MB each and the full PICRUSt2 output
-# archive is ~680 MB. See the README for the download link.
+# archive is ~680 MB. See the README for where the archive is kept.
 # Ignore everything PICRUSt2 produced except the two small unstratified pathway
 # tables the repository tracks. This also covers the case where someone unzips the
 # whole archive into data/ (2.1 GB, including a 132 MB file GitHub would reject).
