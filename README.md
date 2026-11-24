@@ -62,9 +62,8 @@ executes every chunk without needing pandoc.
    - `data/picrust2_out_steady/pathways_out/path_abun_contrib.tsv.gz`
    - `data/picrust2_out_transplant/pathways_out/path_abun_contrib.tsv.gz`
 
-   Both are inside `two_folders_of_picrust_output.zip`, available from
-   [Google Drive](https://drive.google.com/file/d/1IfQi9TMPXJ9QyKjmX4EOgzn8JLyFKWNz/view?usp=drive_link)
-   or from the lab drive archive (see [The PICRUSt2 archive](#the-picrust2-archive)).
+   Both are inside `two_folders_of_picrust_output.zip`, which is kept in the lab
+   drive archive (see [The PICRUSt2 archive](#the-picrust2-archive)).
    From the project root, extract just those two files into place:
 
    ```bash
